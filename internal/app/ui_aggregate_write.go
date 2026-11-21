@@ -163,7 +163,8 @@ func (a *app) aggregateWriteButton(c *ui.Context, src aggregateSource, view *agg
 	if !operations["like"] && !operations["unlike"] && !operations["playlistAddTrack"] {
 		return
 	}
-	button := ui.Button(c.Key("cloud-actions-"+track.ID), T("Cloud Actions")+" "+track.Name).Disabled(view.busy)
+	// 细节操作收进溢出菜单，保留完整无障碍名称，避免每行被长按钮撑满。
+	button := iconButton(c.Key("cloud-actions-"+track.ID), iconMore, 16, a.pal.muted, T("Cloud Actions")+" "+track.Name).Disabled(view.busy)
 	button.Menu(func(m *ui.Menu) {
 		if liked {
 			if m.Item(T("Unlike")).Disabled(!operations["unlike"]).Chosen() {
