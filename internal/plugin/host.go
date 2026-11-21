@@ -93,6 +93,7 @@ func (p *Plugin) installHost(v *vm) error {
 		"dataDir":  p.data,
 		"storage": map[string]any{
 			"get":    moejs.NativeFunc(p.storageGet(v)),
+			"keys":   moejs.NativeFunc(p.storageKeys(v)),
 			"set":    moejs.NativeFunc(p.storageSet(v)),
 			"remove": moejs.NativeFunc(p.storageRemove),
 		},
@@ -180,6 +181,26 @@ func (p *Plugin) storageGet(v *vm) native {
 			return moejs.Undefined(), nil
 		}
 		return v.rt.ParseJSON(raw)
+	}
+}
+
+// 仅枚举当前插件普通存储中匹配前缀的键，不读取值或系统凭据。
+func (p *Plugin) storageKeys(v *vm) native {
+	return func(_ *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
+		arg := moejs.Arg(args, 0)
+		if !arg.IsString() || arg.String() == "" {
+			return moejs.Undefined(), errors.New("storage.keys needs a non-empty string prefix")
+		}
+		prefix := arg.String()
+		keys := []string{}
+		p.mu.Lock()
+		for key := range p.storage {
+			if strings.HasPrefix(key, prefix) {
+				keys = append(keys, key)
+			}
+		}
+		p.mu.Unlock()
+		return v.rt.FromGo(keys)
 	}
 }
 

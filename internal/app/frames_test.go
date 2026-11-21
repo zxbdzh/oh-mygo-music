@@ -64,6 +64,27 @@ func TestHomeEmptyFrame(t *testing.T) {
 	saveFrame(t, dir, "home-empty.png", tt.Image())
 }
 
+// With MM_FRAMES set, saves Home showing cached playlists while account lookup waits.
+func TestHomeCachedWhileAccountLoadsFrame(t *testing.T) {
+	dir := framesDir(t)
+	a := newTestApp()
+	lib := a.library
+	lib.started, lib.homeLoading, lib.accountAsked = true, false, false
+	lib.home = nil
+	lib.mine = []music.Playlist{{ID: "cached", Name: "离线缓存歌单", Mine: true}}
+	a.mineCollapsed = true
+	blocked := make(chan struct{})
+	defer close(blocked)
+	fake(a).account = func() (*music.Account, error) {
+		<-blocked
+		return nil, nil
+	}
+	a.loadAccount(lib)
+	tt := ui.NewTester(a.view, 1200, 800)
+	tt.Frame()
+	saveFrame(t, dir, "home-cached-account-loading.png", tt.Image())
+}
+
 // framesTracks are songs with covers, by an invented band.
 func framesTracks(a *app) []music.Track {
 	covers := []struct{ from, to ui.Color }{

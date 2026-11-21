@@ -154,6 +154,7 @@ A plugin has the JavaScript standard library, timers, `fetch` and its relatives,
 | `host.platform`, `host.arch` | such as `darwin`, `arm64` |
 | `host.dir`, `host.dataDir` | the plugin's folder, and one for its data |
 | `host.storage.get(key)`, `.set(key, value)`, `.remove(key)` | JSON values that outlive the app |
+| `host.storage.keys(prefix)` | unordered keys in this plugin's JSON storage that start with a non-empty prefix; no values or system credentials |
 | `host.setting(key)` | what the listener filled in |
 | `host.t(text)`, `host.language()` | the text in the listener's language, from the plugin's `locales`, and that language: `en` or `zh-CN` |
 | `host.removeDataDir(name)` | removes a folder inside `host.dataDir` |

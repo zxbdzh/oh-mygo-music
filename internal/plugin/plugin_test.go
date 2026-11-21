@@ -387,6 +387,29 @@ export function suggest() { const t = host.storage.get("token"); return [t ? t.v
 	}
 }
 
+// 枚举只返回当前插件指定前缀的键，不能省略前缀读取全部键。
+func TestStorageKeysAreScopedByPrefixAndPlugin(t *testing.T) {
+	other := load(t, `{"id":"other"}`, `
+export function signOut() { host.storage.set("link:other", true); }`)
+	if err := other.SignOut(); err != nil {
+		t.Fatal(err)
+	}
+	p := load(t, plain, `
+host.storage.set("link:kept", false);
+host.storage.set("settings", { active: true });
+export function suggest({ query }) { return host.storage.keys(query); }
+export function home() { host.storage.keys(); return {}; }`)
+	if got, err := p.Suggest("link:"); err != nil || len(got) != 1 || got[0] != "link:kept" {
+		t.Fatalf("matching keys: %v, %v", got, err)
+	}
+	if _, err := p.Suggest(""); err == nil {
+		t.Fatal("empty prefix allowed")
+	}
+	if _, err := p.Home(); err == nil {
+		t.Fatal("missing prefix allowed")
+	}
+}
+
 // The module's top level can use its storage and settings as it starts, as a
 // plugin reads its saved sign-in there.
 func TestTopLevelReadsStorage(t *testing.T) {

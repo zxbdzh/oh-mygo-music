@@ -1426,6 +1426,20 @@ export function resolveCandidate({signal}) { return new Promise((resolve, reject
 	})
 }
 
+// Cooperative timeout ends loading without leaking the raw context error to the listener.
+func TestCooperativeTimeoutUsesRecoverablePlaybackError(t *testing.T) {
+	src := cooperativePlugin(t, `
+export function playbackPlan() { return {targetQuality:"flac",minimumQuality:"128k",candidateTimeoutMs:10,roundTimeoutMs:20,candidates:[{id:"a",platform:"wy",trackID:"a",quality:"flac"}]}; }
+export function resolveCandidate({signal}) { return new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), {once:true})); }
+`)
+	p, posts := cooperativePlayer(src)
+	p.PlayTrack([]music.Track{{ID: "one", Source: "cooperative"}}, 0)
+	finishLoading(t, p, posts)
+	if p.Loading() || p.Playing() || p.Err() != "Playback timed out; try again" {
+		t.Fatalf("协作超时没有收敛为可恢复错误：loading=%v playing=%v error=%q", p.Loading(), p.Playing(), p.Err())
+	}
+}
+
 // 首个解析永不返回时，候选五秒截止后在同一轮继续，不能卡死或重试该组合。
 func TestCooperativeCandidateTimeoutUsesVirtualTime(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

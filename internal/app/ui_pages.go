@@ -60,10 +60,10 @@ func (a *app) homePage(c *ui.Context) {
 		a.browseRows(c, lib.home, "", func(c *ui.Context) { a.homeHello(c, now) })
 		return
 	}
-	loading := lib.homeLoading || !lib.started || lib.accountUnknown()
-	// A source that makes up its own Home shows none of this one until it said
-	// it has none: its playlists, loaded first, would show here, then make way.
-	nothing := len(lib.recent) == 0 && len(lib.mine) == 0 && len(lib.saved) == 0 || lib.can("home") && loading
+	cached := len(lib.recent) > 0 || len(lib.mine) > 0 || len(lib.saved) > 0
+	loading := lib.homeLoading || !lib.started || (lib.accountUnknown() && !cached)
+	// 账号查询只影响个人操作；已有缓存先展示，空白首屏仍等待账号结果再决定空状态。
+	nothing := !cached || lib.can("home") && loading
 	if nothing && !loading {
 		if lib.homeErr != "" {
 			a.centered(c, lib.homeErr, func() { a.loadHome(lib) })

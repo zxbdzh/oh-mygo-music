@@ -2,6 +2,8 @@
 
 ## [0.0.11] - 2026-11-21
 
+**Windows 升级提醒：** 从 `0.0.9` 更新后，如果「设置 → 更新」仍显示 `0.0.9`，或仍看到旧图标，请先从系统托盘退出旧版，再到原安装目录打开 `Oh MyGo Music.exe`，不要使用旧快捷方式。找不到新版程序时，请从[本页下载 Windows 安装包](https://github.com/zxbdzh/oh-mygo-music/releases/tag/v0.0.11)覆盖安装，无需先卸载，原有音乐库、插件和设置会保留。确认版本为 `0.0.11` 后，再重新固定新版快捷方式。
+
 - macOS 全局快捷键支持 Command、Control、Option 和 Shift 组合，录入与保存后可正常恢复。
 - macOS 快捷键显示改用系统符号，并按 Control、Option、Shift、Command 的顺序展示。
 - 修复 macOS 键盘布局与物理按键位置不一致时的快捷键录入问题。

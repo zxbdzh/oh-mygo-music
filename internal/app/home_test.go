@@ -284,6 +284,32 @@ func TestHomeWaitsForTheSourcesOwn(t *testing.T) {
 	}
 }
 
+// Home can show cached playlists while the account lookup is still pending.
+func TestHomeShowsCachedPlaylistsWhileAccountLoads(t *testing.T) {
+	a := newTestApp()
+	lib := a.library
+	lib.started, lib.homeLoading, lib.accountAsked = true, false, false
+	lib.home = nil
+	lib.mine = []music.Playlist{{ID: "cached", Name: "缓存歌单", Mine: true}}
+	a.mineCollapsed = true // 折叠侧栏，确保断言命中首页主体中的歌单。
+	blocked := make(chan struct{})
+	defer close(blocked)
+	fake(a).account = func() (*music.Account, error) {
+		<-blocked
+		return nil, nil
+	}
+	a.loadAccount(lib)
+
+	tt := ui.NewTester(a.view, 1200, 800)
+	tt.Frame()
+	if _, ok := tt.Find("缓存歌单"); !ok {
+		t.Fatalf("账号仍在加载时隐藏了缓存歌单：%q", tt.Texts())
+	}
+	if _, ok := tt.Find("Loading"); ok {
+		t.Fatalf("账号仍在加载时错误显示首页骨架：%q", tt.Texts())
+	}
+}
+
 // A source's Home that has no sections falls back as one that has no Home does.
 func TestHomeWithoutSectionsFallsBack(t *testing.T) {
 	a := newTestApp()

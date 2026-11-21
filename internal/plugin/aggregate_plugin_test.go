@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -456,6 +457,42 @@ func TestAggregatePluginLogoutPreservesSameNamedAccountOnAnotherPlatform(t *test
 	}
 	if len(page.Sections[0].Tracks) != 1 || page.Sections[0].Tracks[0].AggregateSources[0].Platform != "tx" {
 		t.Fatalf("退出一个平台账号删除了另一个平台的同名账号: %+v", page.Sections)
+	}
+}
+
+// 大缓存首页只查已有的关联，且仍识别升级前保存的关联键。
+func TestAggregatePluginHomeSkipsUnrecordedPairs(t *testing.T) {
+	p := loadAggregateWithPrelude(t, `
+const readHomeStorage = host.storage.get;
+let homeLinkReads = 0;
+host.storage.get = key => {
+  if (key.startsWith("link:") && ++homeLinkReads > 20) throw new Error("Home scanned unrecorded pairs");
+  return readHomeStorage(key);
+};
+`)
+	p.mu.Lock()
+	p.storage[`link:["[\"tx\",\"qa\",\"0\"]","[\"tx\",\"qa\",\"999\"]"]`] = json.RawMessage(`true`)
+	p.mu.Unlock()
+	tracks := make([]map[string]string, 1000)
+	for index := range tracks {
+		id := strconv.Itoa(index)
+		tracks[index] = map[string]string{"id": id, "name": "Cached " + id}
+	}
+	if _, err := p.Aggregate("commitSnapshot", map[string]any{
+		"platform": "tx", "accountID": "qa", "listID": "liked", "complete": true, "refreshedAt": 1, "tracks": tracks,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := p.Home()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Sections) != 1 || len(page.Sections[0].Tracks) != 999 {
+		t.Fatal("首页遗漏曲目或未合并已有的人工关联")
+	}
+	first := page.Sections[0].Tracks[0]
+	if first.Name != "Cached 0" || len(first.AggregateLinks) != 1 || len(first.AggregateSources) != 2 {
+		t.Fatal("首页未保留顺序、旧关联或原始来源")
 	}
 }
 

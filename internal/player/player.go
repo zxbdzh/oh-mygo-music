@@ -1323,6 +1323,8 @@ func errorText(err error) string {
 		return i18n.T("This song isn't available")
 	case errors.Is(err, music.ErrSignIn):
 		return i18n.T("Sign in to play this song")
+	case errors.Is(err, context.DeadlineExceeded):
+		return i18n.T("Playback timed out; try again")
 	case errors.Is(err, music.ErrSetup):
 		if reason := music.Reason(err); reason != "" {
 			return reason
