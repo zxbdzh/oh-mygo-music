@@ -241,7 +241,35 @@ func TestAggregateSourceDetailsKeepListMemberships(t *testing.T) {
 	}
 }
 
-// 聚合曲库滚动到底部后，最后一首仍需避开播放器并可直接播放。
+// 筛选无结果后清空条件应恢复可播放曲目，不能清除来源选择或改写缓存。
+func TestAggregateClearFiltersRestoresTracks(t *testing.T) {
+	a, _, _, _ := aggregateFixture(t)
+	source := music.AggregateSource{Platform: "wy", AccountID: "account-a", TrackID: "cached", ListID: "liked"}
+	home := &music.Browse{Sections: []music.Section{{Tracks: []music.Track{{
+		ID: "cached", Name: "Cached Track", AggregateSources: []music.AggregateSource{source},
+	}}}}}
+	a.library.home = home
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.aggregateLibrary(c, a.library, paletteFor(c.Theme()), false)
+	}, 900, 760)
+	view := a.aggregateViews[a.library]
+	view.query, view.platform, view.list, view.kind = "missing", "tx", "other", "Playlists"
+	tt.Frame()
+	if err := tt.Click("Clear"); err != nil {
+		t.Fatal(err)
+	}
+	if view.query != "" || view.platform != "All" || view.list != "All" || view.kind != "All" || a.library.home != home {
+		t.Fatal("清空筛选没有恢复浏览条件，或意外改写缓存")
+	}
+	if err := tt.Click("Cached Track"); err != nil {
+		t.Fatal(err)
+	}
+	if current := a.pl.Current(); current == nil || current.ID != "cached" {
+		t.Fatal("清空后曲目没有恢复正常的选播操作")
+	}
+}
+
+// 完整主窗口中滚动到底部后，最后一首必须避开播放器，不能只在单独页面里可点。
 func TestAggregateLibraryScrollsPastPlayerBar(t *testing.T) {
 	a, _, _, _ := aggregateFixture(t)
 	tracks := make([]music.Track, 0, 24)
@@ -255,13 +283,15 @@ func TestAggregateLibraryScrollsPastPlayerBar(t *testing.T) {
 		})
 	}
 	a.library.home = &music.Browse{Sections: []music.Section{{Title: "Long list", Tracks: tracks}}}
-	tt := ui.NewTester(func(c *ui.Context) {
-		a.aggregateLibrary(c, a.library, paletteFor(c.Theme()), false)
-	}, 760, 700)
+	tt := ui.NewTester(a.view, 900, 760)
 	tt.Frame()
-	tt.Scroll(600, 500, 0, 100000)
+	tt.Scroll(820, 500, 0, 100000)
 	tt.Advance(time.Second)
 	tt.Frame()
+	last, ok := tt.Access("Scroll Track 23")
+	if !ok || last.Bounds.Y+last.Bounds.H > 760-playerBarHeight {
+		t.Fatalf("最后一首仍被真实播放器覆盖：%+v", last)
+	}
 	if err := tt.Click("Scroll Track 23"); err != nil {
 		t.Fatalf("滚动到底部后最后一首不可操作：%v", err)
 	}
@@ -317,6 +347,18 @@ func TestAggregateLibraryFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	saveFrame(t, dir, "aggregate-library-details.png", details.Image())
+	for _, width := range []int{900, 1180} {
+		for _, dark := range []bool{false, true} {
+			a.pageScroll = ui.ScrollState{}
+			window := ui.NewTester(a.view, width, 760)
+			window.SetDark(dark)
+			settled(window)
+			saveFrame(t, dir, fmt.Sprintf("aggregate-window-%d-dark-%v.png", width, dark), window.Image())
+			window.Scroll(float32(width-80), 550, 0, 100000)
+			settled(window)
+			saveFrame(t, dir, fmt.Sprintf("aggregate-window-%d-lower-dark-%v.png", width, dark), window.Image())
+		}
+	}
 }
 
 func aggregateTarget(t *testing.T, src *plugin.Plugin) string {

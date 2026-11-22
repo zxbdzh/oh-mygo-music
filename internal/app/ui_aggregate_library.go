@@ -51,26 +51,22 @@ func (a *app) aggregateLibrary(c *ui.Context, lib *library, p palette, _ bool) {
 			}
 		}).Gap(12).Children(func() {
 			ui.Row(c.Key("aggregate-hero")).Gap(12).AlignItems(ui.Center).Children(func() {
-				ui.Box(c).Size(44, 44).Radius(13).Center().Background(p.accent.Alpha(0.12)).Children(func() {
-					ui.Icon(c, iconPlaylist).Size(22, 22).TextColor(p.accent)
-				})
-				ui.Text(c, T("Oh MyGo Music Aggregate")).FontSize(19).FontWeight(700).LetterSpacing(-0.2)
-				ui.Box(c).Grow(1)
+				ui.Icon(c, iconPlaylist).Size(16, 16).TextColor(p.muted)
+				ui.Text(c, T("Oh MyGo Music Aggregate")).FontSize(18).FontWeight(600).Grow(1).MinWidth(0)
 				if view.busy {
 					ui.Text(c, T("Updating aggregate data…")).FontSize(12).TextColor(p.muted)
 				}
 			})
 			a.aggregateLibraryFilters(c, view, platforms, lists, p)
-			ui.Row(c.Key("aggregate-refresh-controls")).Gap(8).AlignItems(ui.Center).Children(func() {
-				if pillButton(c.Key("refresh-cloud-lists"), iconRefresh, T("Refresh Cloud Lists"), p.accent, p.onAccent).Disabled(view.busy).Clicked() {
+			ui.Row(c.Key("aggregate-refresh-controls")).Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
+				if ui.PrimaryButton(c.Key("refresh-cloud-lists"), T("Refresh Cloud Lists")).Height(32).Radius(6).Disabled(view.busy).Clicked() {
 					a.aggregateLibraryFetch(lib, src, true)
 				}
-				if pillButton(c.Key("reload-local-cache"), iconRefresh, T("Reload Cached Data"), p.hover, p.text).Disabled(view.busy).Clicked() {
+				if ui.Button(c.Key("reload-local-cache"), T("Reload Cached Data")).Height(32).Radius(6).Disabled(view.busy).Clicked() {
 					a.aggregateLibraryReload(lib, src)
 				}
-				ui.Box(c).Grow(1)
 				if accounts := aggregateWriteAccounts(view); len(accounts) > 0 {
-					button := ui.Button(c.Key("create-playlist"), T("Create Playlist")).Height(34).PaddingX(12).Radius(8).Disabled(view.busy)
+					button := ui.Button(c.Key("create-playlist"), T("Create Playlist")).Height(32).PaddingX(12).Radius(6).Disabled(view.busy)
 					button.Menu(func(m *ui.Menu) {
 						for _, account := range accounts {
 							account := account
@@ -107,10 +103,10 @@ func (a *app) aggregateLibrary(c *ui.Context, lib *library, p palette, _ bool) {
 				}
 				shown += len(filtered)
 				sectionKey := aggregateSectionIdentity(sectionIndex, section.Title)
-				ui.Column(c.Key("aggregate-section-"+section.Title)).Gap(0).Radius(12).Background(p.bg).Border(1, p.hairline).Dividers(1, p.hairline).Children(func() {
+				ui.Column(c.Key(sectionKey)).Gap(0).Radius(8).Background(p.bg).Border(1, p.hairline).Dividers(1, p.hairline).Children(func() {
 					ui.Row(c.Key("aggregate-section-heading-"+section.Title)).Padding(10, 12).Gap(8).AlignItems(ui.Center).Background(p.hover).Children(func() {
 						ui.Icon(c, iconPlaylist).Size(16, 16).TextColor(p.muted)
-						ui.Text(c, section.Title).FontSize(16).FontWeight(700).TextColor(p.text).Grow(1)
+						ui.Text(c, section.Title).FontSize(15).FontWeight(600).TextColor(p.text).Grow(1).MinWidth(0)
 						ui.Text(c, fmt.Sprintf("%d", len(filtered))).FontSize(12).TextColor(p.muted)
 					})
 					for _, trackIndex := range filtered {
@@ -198,9 +194,16 @@ func (a *app) aggregateLibrary(c *ui.Context, lib *library, p palette, _ bool) {
 				})
 			}
 			if shown == 0 {
-				ui.Column(c.Key("aggregate-empty")).Padding(28, 16).Radius(12).Background(p.hover).Children(func() {
+				ui.Column(c.Key("aggregate-empty")).Gap(8).Padding(20, 12).Children(func() {
 					ui.Icon(c, iconSearch).Size(22, 22).TextColor(p.muted)
-					ui.Text(c, T("No tracks match these filters.")).FontSize(13).TextColor(p.muted)
+					if aggregateLibraryTrackCount(lib.home) == 0 {
+						ui.Text(c, T("No successful cache yet")).FontSize(13).TextColor(p.muted)
+					} else {
+						ui.Text(c, T("No tracks match these filters.")).FontSize(13).TextColor(p.muted)
+						if ui.Button(c.Key("clear-aggregate-filters"), T("Clear")).AlignSelf(ui.Start).Clicked() {
+							view.kind, view.platform, view.list, view.query = "All", "All", "All", ""
+						}
+					}
 				})
 			}
 		})
@@ -208,10 +211,6 @@ func (a *app) aggregateLibrary(c *ui.Context, lib *library, p palette, _ bool) {
 }
 
 func (a *app) aggregateLibraryFilters(c *ui.Context, view *aggregateView, platforms, lists []string, p palette) {
-	compact := false
-	if width, _ := c.Size(); width < 760 {
-		compact = true
-	}
 	ui.Column(c.Key("aggregate-filter-card")).Gap(10).Padding(12).Radius(8).Background(p.hover).Border(1, p.hairline).Children(func() {
 		ui.Row(c.Key("aggregate-filter-heading")).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, iconSearch).Size(15, 15).TextColor(p.muted)
@@ -240,21 +239,17 @@ func (a *app) aggregateLibraryFilters(c *ui.Context, view *aggregateView, platfo
 				}
 			})
 		}
-		platformWidth, listWidth := float32(150), float32(220)
-		if compact {
-			platformWidth, listWidth = 150, 220
-		}
 		ui.Row(c.Key("aggregate-filter-selects")).Wrap().Gap(8).Children(func() {
-			drawSelect("aggregate-platform", "Platform", &view.platform, platforms, platformWidth)
-			drawSelect("aggregate-list", "Source List", &view.list, lists, listWidth)
-		})
-		ui.Column(c.Key("aggregate-query-field")).Gap(4).Children(func() {
-			ui.Text(c, T("Filter Tracks")).FontSize(11).TextColor(p.muted)
-			ui.Row(c.Key("aggregate-query-row")).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.TextInput(c.Key("aggregate-query"), &view.query).Label(T("Filter Tracks")).Grow(1).MinWidth(0).Disabled(view.busy)
-				if view.query != "" && iconButton(c.Key("clear-aggregate-query"), iconX, 14, p.muted, T("Clear Search")).Disabled(view.busy).Clicked() {
-					view.query = ""
-				}
+			drawSelect("aggregate-platform", "Platform", &view.platform, platforms, 150)
+			drawSelect("aggregate-list", "Source List", &view.list, lists, 200)
+			ui.Column(c.Key("aggregate-query-field")).Gap(4).Grow(1).MinWidth(210).Children(func() {
+				ui.Text(c, T("Filter Tracks")).FontSize(11).TextColor(p.muted)
+				ui.Row(c.Key("aggregate-query-row")).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.TextInput(c.Key("aggregate-query"), &view.query).Label(T("Filter Tracks")).Grow(1).MinWidth(0).Disabled(view.busy)
+					if view.query != "" && iconButton(c.Key("clear-aggregate-query"), iconX, 14, p.muted, T("Clear Search")).Disabled(view.busy).Clicked() {
+						view.query = ""
+					}
+				})
 			})
 		})
 	})
@@ -317,15 +312,15 @@ func (a *app) aggregateTrackDetails(c *ui.Context, track *music.Track, p palette
 		for _, detail := range aggregateSourceDetails(track.AggregateSources) {
 			source := detail.source
 			ui.Column(c.Key("aggregate-source-detail-"+aggregateSourceKey(source))).Gap(3).Padding(4, 0).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
 					meta := aggregatePlatformName(source.Platform)
 					if source.AccountID != "" {
 						meta += " · " + source.AccountID
 					}
-					ui.Text(c, meta).FontSize(11.5).TextColor(p.text).SingleLine().Grow(1).MinWidth(0)
-					ui.Text(c, source.TrackID).FontSize(11).TextColor(p.muted).SingleLine()
+					ui.Text(c, meta).FontSize(11.5).TextColor(p.text).Grow(1).MinWidth(160)
+					ui.Text(c, source.TrackID).FontSize(11).TextColor(p.muted)
 				})
-				ui.Text(c, T("Source List")+" · "+strings.Join(detail.lists, " · ")).FontSize(11).TextColor(p.muted).SingleLine()
+				ui.Text(c, T("Source List")+" · "+strings.Join(detail.lists, " · ")).FontSize(11).TextColor(p.muted).LineHeight(1.45)
 			})
 		}
 		if track.AggregateManual {
@@ -376,11 +371,11 @@ func aggregateSourceDetails(sources []music.AggregateSource) []aggregateSourceDe
 }
 
 func aggregateSourceListCount(sources []music.AggregateSource) int {
-	seen := make(map[string]bool, len(sources))
+	seen := make(map[[4]string]bool, len(sources))
 	for _, source := range sources {
-		key := source.Platform + "\x00" + source.AccountID + "\x00" + source.ListID
+		key := [4]string{source.Platform, source.AccountID, source.ListID}
 		if source.ListID == "" {
-			key += "\x00" + source.ListName
+			key[3] = source.ListName
 		}
 		seen[key] = true
 	}
@@ -444,11 +439,11 @@ func (a *app) aggregateLibraryCachedLists(c *ui.Context, lib *library, src aggre
 		})
 		for _, cached := range view.lists {
 			cached := cached
-			ui.Row(c.Key("cached-list-row-"+cached.Platform+cached.AccountID+cached.ListID)).Gap(10).Padding(6, 8).Radius(8).Background(p.bg).AlignItems(ui.Center).Children(func() {
+			ui.Row(c.Key([3]string{cached.Platform, cached.AccountID, cached.ListID})).Wrap().Gap(10).Padding(6, 8).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Size(30, 30).Radius(8).Center().Background(p.accent.Alpha(0.1)).Children(func() {
 					ui.Icon(c, iconPlaylist).Size(15, 15).TextColor(p.accent)
 				})
-				ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
+				ui.Column(c).Gap(2).Grow(1).MinWidth(220).Children(func() {
 					ui.Text(c, cached.ListName).FontSize(13).FontWeight(500).SingleLine()
 					meta := aggregatePlatformName(cached.Platform)
 					if cached.AccountID != "" {
@@ -466,7 +461,8 @@ func (a *app) aggregateLibraryCachedLists(c *ui.Context, lib *library, src aggre
 					if cached.Selected {
 						title = T("Exclude Cached List")
 					}
-					button := ui.Button(c.Key("cached-list-"+cached.Platform+cached.AccountID+cached.ListID), title+" "+cached.ListName).Height(30).PaddingX(10).Radius(7).Disabled(view.busy || view.loadingLists)
+					button := ui.Button(c.Key("cached-list-"+cached.Platform+cached.AccountID+cached.ListID), T(title)).
+						Label(T(title) + " " + cached.ListName).Height(32).PaddingX(10).Radius(6).Disabled(view.busy || view.loadingLists)
 					if button.Clicked() {
 						a.aggregateLibrarySelectList(lib, src, view, cached, !cached.Selected)
 					}
@@ -474,7 +470,7 @@ func (a *app) aggregateLibraryCachedLists(c *ui.Context, lib *library, src aggre
 					account := aggregateWriteAccount{platform: cached.Platform, accountID: cached.AccountID}
 					if aggregateWriteGenerationKnown(view, account) &&
 						(operations["playlistRename"] || operations["playlistDelete"]) {
-						button := ui.Button(c.Key("playlist-actions-"+cached.Platform+cached.AccountID+cached.ListID), T("Playlist Actions")+" "+cached.ListName).Height(30).PaddingX(10).Radius(7).Disabled(view.busy)
+						button := iconButton(c.Key("playlist-actions-"+cached.Platform+cached.AccountID+cached.ListID), iconMore, 16, p.muted, T("Playlist Actions")+" "+cached.ListName).Disabled(view.busy)
 						button.Menu(func(m *ui.Menu) {
 							if operations["playlistRename"] && m.Item(T("Rename")).Chosen() {
 								a.aggregateWriteStartList(src, view, cached, "playlistRename")

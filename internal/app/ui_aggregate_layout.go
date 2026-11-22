@@ -124,7 +124,7 @@ func (a *app) aggregateSettingsLayout(c *ui.Context, lib *library, e *aggregateE
 		ui.Text(c, T("Stall detection must be below the recovery budget; changes apply to new playback flows.")).FontSize(11.5).TextColor(p.muted)
 	}
 	if e.dirty() {
-		ui.Row(c).Gap(8).Children(func() {
+		ui.Row(c).Wrap().Gap(8).Children(func() {
 			if ui.PrimaryButton(c.Key("save"), T("Save Aggregate Settings")).Disabled(e.busy).Clicked() {
 				input := map[string]any{"targetQuality": e.target, "minimumQuality": e.minimum, "platformOrder": e.order}
 				valid := true
@@ -147,7 +147,7 @@ func (a *app) aggregateSettingsLayout(c *ui.Context, lib *library, e *aggregateE
 			}
 		})
 	}
-	ui.Row(c).Gap(8).Children(func() {
+	ui.Row(c).Wrap().Gap(8).Children(func() {
 		if ui.Button(c.Key("reload"), T("Reload aggregate status")).Disabled(e.busy).Clicked() {
 			a.aggregateCommand(lib, e, "status", nil)
 		}

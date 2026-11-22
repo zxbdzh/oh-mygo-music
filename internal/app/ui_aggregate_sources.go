@@ -41,7 +41,7 @@ func (a *app) aggregateSourceSettings(c *ui.Context, lib *library, e *aggregateE
 			c.After(e.sourceNextPoll.Sub(c.Now()))
 		}
 	}
-	ui.Row(c).Gap(10).MinHeight(40).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Wrap().Gap(10).MinHeight(40).AlignItems(ui.Center).Children(func() {
 		ui.Icon(c, iconPlug).Size(16, 16).TextColor(p.muted)
 		ui.Text(c, T("Playback Sources")).FontSize(15).FontWeight(500).Grow(1)
 		if !e.sourceInput && ui.PrimaryButton(c.Key("add-source"), T("Add Source")).Disabled(e.busy).Clicked() {
@@ -58,7 +58,7 @@ func (a *app) aggregateSourceSettings(c *ui.Context, lib *library, e *aggregateE
 		ui.Column(c.Key("source-input")).Gap(6).Padding(10).Background(p.hover).Radius(6).Children(func() {
 			ui.Text(c, T("Source Link")).FontSize(12.5).FontWeight(500)
 			ui.TextInput(c.Key("source-link"), &e.sourceLink).Label(T("Source Link")).Password().WidthPercent(100).Disabled(e.busy)
-			ui.Row(c).Gap(8).Children(func() {
+			ui.Row(c).Wrap().Gap(8).Children(func() {
 				label := "Confirm Add Source"
 				if e.sourceTarget != "" {
 					label = "Replace Source"
@@ -82,7 +82,7 @@ func (a *app) aggregateSourceSettings(c *ui.Context, lib *library, e *aggregateE
 		})
 	}
 	if e.sourceTarget != "" {
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Wrap().Gap(12).AlignItems(ui.Center).Children(func() {
 			name := e.sourceTarget
 			for _, source := range e.sources.Items {
 				if source.ID == e.sourceTarget {
