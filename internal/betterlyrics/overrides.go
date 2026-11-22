@@ -21,7 +21,6 @@ import (
 type SongKey struct {
 	Source   string `json:"source"`
 	StableID string `json:"stableId"`
-	PlaybackID string `json:"playbackId,omitempty"`
 }
 
 func (k SongKey) valid() bool {
@@ -29,8 +28,7 @@ func (k SongKey) valid() bool {
 }
 
 func (k SongKey) index() string {
-	encoded, _ := json.Marshal(k)
-	return string(encoded)
+	return k.Source + "\x00" + k.StableID
 }
 
 func KeyForTrack(track music.Track) SongKey {
@@ -42,7 +40,7 @@ func KeyForTrack(track music.Track) SongKey {
 		metadata, _ := json.Marshal([]any{normalizeIdentity(track.Name), normalizeIdentity(track.ArtistNames()), normalizeIdentity(track.Album.Name), track.Duration})
 		return SongKey{Source: track.Source, StableID: fmt.Sprintf("metadata:%x", sha256.Sum256(metadata))}
 	}
-	return SongKey{Source: track.Source, StableID: track.ID, PlaybackID: track.PlaybackID}
+	return SongKey{Source: track.Source, StableID: track.ID}
 }
 
 func normalizeIdentity(text string) string {

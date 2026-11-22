@@ -346,7 +346,7 @@ func (s *Server) putLyricsOverride(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteLyricsOverride(w http.ResponseWriter, r *http.Request) {
-	key := SongKey{Source: r.URL.Query().Get("source"), StableID: r.URL.Query().Get("stableId"), PlaybackID: r.URL.Query().Get("playbackId")}
+	key := SongKey{Source: r.URL.Query().Get("source"), StableID: r.URL.Query().Get("stableId")}
 	if !key.valid() {
 		http.Error(w, "a valid songKey is required", http.StatusBadRequest)
 		return
