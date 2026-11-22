@@ -45,6 +45,8 @@ type Player struct {
 	Transitions func() TransitionSettings
 	// Cache keeps the songs played, if set.
 	Cache *Cache
+	// 手动覆盖优先读取，不改写音源本来的歌词。
+	LyricsOverride func(music.Track) *music.Lyrics
 	// Changed, if set, hears that what plays, where it is or whether it
 	// plays changed.
 	Changed func()
@@ -82,9 +84,10 @@ type Player struct {
 	playback            *playbackAttempt
 	monitorCancel       context.CancelFunc
 
-	lyrics       []lyrics.Line
-	lyricsSource *music.Lyrics
-	lyricsLoaded bool
+	lyrics           []lyrics.Line
+	lyricsSource     *music.Lyrics
+	lyricsLoaded     bool
+	lyricsGeneration uint64
 
 	// pending holds a seek asked for while the track loads.
 	pending time.Duration
@@ -460,7 +463,7 @@ func (p *Player) Repeat() RepeatMode { return p.repeat }
 // Lyrics returns the current track's lyrics, and whether they have loaded.
 func (p *Player) Lyrics() ([]lyrics.Line, bool) { return p.lyrics, p.lyricsLoaded }
 
-// LyricsSource returns a copy of the source's original lyrics and whether they have loaded.
+// LyricsSource 返回当前有效歌词，不暴露解析器内部的可变切片。
 func (p *Player) LyricsSource() (*music.Lyrics, bool) {
 	if p.lyricsSource == nil {
 		return nil, p.lyricsLoaded
@@ -471,6 +474,15 @@ func (p *Player) LyricsSource() (*music.Lyrics, bool) {
 		source.Lines[i].Words = append([]music.LyricWord(nil), source.Lines[i].Words...)
 	}
 	return &source, p.lyricsLoaded
+}
+
+// 只重载歌词，不重启音频或改变播放位置。
+func (p *Player) ReloadLyrics() {
+	if p.track == nil {
+		return
+	}
+	p.lyrics, p.lyricsSource, p.lyricsLoaded = nil, nil, false
+	p.loadLyrics(p.gen, p.sourceOf(p.track), *p.track)
 }
 
 // Downloaded returns the share of the current track downloaded so far, or
@@ -1193,6 +1205,8 @@ func (p *Player) startLoaded(ctx context.Context, gen int, s stream, info *music
 			// 只记录已成功开播的位置，重复入队的同 ID 曲目不能继承这个版本。
 			p.track.PlaybackID = info.PlaybackID
 			p.queue[p.order[p.at]].PlaybackID = info.PlaybackID
+			// 聚合音源确定实际录音后，必须按这个版本重新查找覆盖，不能继承别的录音。
+			p.ReloadLyrics()
 		}
 		p.fade.fade(1, p.playFadeDuration(), nil)
 		if p.transition == nil {
@@ -1232,17 +1246,27 @@ func (p *Player) loadCover(gen int, t *music.Track) {
 // loadLyrics asks the source of t for its lyrics, if it has any.
 func (p *Player) loadLyrics(gen int, src music.Source, t music.Track) {
 	expected := p.playback
+	p.lyricsGeneration++
+	revision := p.lyricsGeneration
+	var override *music.Lyrics
+	if p.LyricsOverride != nil {
+		override = p.LyricsOverride(t)
+	}
 	go func() {
 		var lines []lyrics.Line
 		var source *music.Lyrics
-		if src != nil && src.Can("lyrics") {
+		if override != nil {
+			source = override
+			lines = lyrics.FromSource(source)
+		}
+		if source == nil && src != nil && src.Can("lyrics") {
 			if l, err := src.Lyrics(t.ID); err == nil && l != nil {
 				source = l
 				lines = lyrics.FromSource(l)
 			}
 		}
 		p.post(func() {
-			if gen == p.gen && p.playback == expected {
+			if gen == p.gen && p.playback == expected && revision == p.lyricsGeneration {
 				p.lyrics, p.lyricsSource = lines, source
 				p.lyricsLoaded = true
 				if p.Changed != nil {

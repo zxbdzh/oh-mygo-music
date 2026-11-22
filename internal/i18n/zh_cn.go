@@ -2,6 +2,12 @@ package i18n
 
 // zhCN is the app's text in Simplified Chinese, by its English.
 var zhCN = map[string]string{
+	"Allow BetterLyrics to Change Lyrics":                 "允许 BetterLyrics 修改歌词",
+	"Save manually selected lyrics on this computer":      "将手动选择的歌词保存在本机，供以后播放使用",
+	"Restore Current Song Lyrics":                         "恢复当前歌曲的原始歌词",
+	"Clear the manual choice and use the original source": "清除手动选择，重新使用歌曲来源的歌词",
+	"Could not restore source lyrics":                     "原始歌词恢复失败，请重试",
+
 	"NetEase Music":                 "网易云音乐",
 	"QQ Music":                      "QQ 音乐",
 	"Qishui Music":                  "汽水音乐",

@@ -576,6 +576,20 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 				a.setBetterLyricsIntegration()
 			}
 		})
+		row(T("Allow BetterLyrics to Change Lyrics"), T("Save manually selected lyrics on this computer"), func() {
+			if ui.Switch(c.Key("betterlyrics-write"), &s.BetterLyricsLyricsWrite).
+				Label(T("Allow BetterLyrics to Change Lyrics")).Disabled(!s.BetterLyricsIntegration).Changed() {
+				a.changed()
+				a.setBetterLyricsIntegration()
+			}
+		})
+		row(T("Restore Current Song Lyrics"), T("Clear the manual choice and use the original source"), func() {
+			hasOverride := a.betterLyricsOverrides != nil && a.pl != nil && a.pl.Current() != nil &&
+				a.betterLyricsOverrides.Has(a.betterLyricsSongKey(*a.pl.Current()))
+			if ui.Button(c.Key("betterlyrics-clear"), T("Restore Current Song Lyrics")).Disabled(!hasOverride).Clicked() {
+				a.clearBetterLyricsOverride()
+			}
+		})
 		if a.anyCan("comments") {
 			settingsHeading(c, block, T("Playback Content"), iconComment)
 			row(T("Top Comments in Quiet Parts"), T("In intros, breaks and outros, a song's top comments show in place of the lyrics"), func() {

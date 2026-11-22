@@ -99,6 +99,8 @@ type settings struct {
 	HotComments bool `json:"hotComments"`
 	// BetterLyricsIntegration shares playback and source lyrics over loopback when enabled.
 	BetterLyricsIntegration bool `json:"betterLyricsIntegration"`
+	// 独立授权默认关闭，旧版本只读联动不能在升级后自动获得写权限。
+	BetterLyricsLyricsWrite bool `json:"betterLyricsLyricsWrite"`
 	// Fog fills Now Playing's backdrop with fog of the cover's color,
 	// rising and swelling with the bass: an experiment the listener turns
 	// on.

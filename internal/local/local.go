@@ -532,6 +532,14 @@ func (s *Source) PostComment(trackID, text string) (*music.Comment, error) {
 // lrcTime is how a line of LRC starts, which tells it from plain words.
 var lrcTime = regexp.MustCompile(`\[\d+:\d{2}`)
 
+// 本地歌曲用真实路径建立覆盖键，不把扫描生成的短 ID 当成文件路径。
+func (s *Source) TrackPath(id string) string {
+	if item, found := s.cat.Load().byID[id]; found {
+		return item.Path
+	}
+	return ""
+}
+
 // Lyrics answers the .lrc beside the file, or else what's in its tags if it's
 // timed: plain words can't follow the song.
 func (s *Source) Lyrics(id string) (*music.Lyrics, error) {

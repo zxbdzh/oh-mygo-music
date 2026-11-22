@@ -124,6 +124,7 @@ type app struct {
 	settingsUnderTop      bool // the settings' page has scrolled under its top edge
 	playbackSettingsError string
 	betterLyricsServer    *betterlyrics.Server
+	betterLyricsOverrides *betterlyrics.OverrideStore
 	betterLyricsTimer     *time.Timer
 	betterLyricsTrackKey  string
 	betterLyricsTrackID   uint64
@@ -388,10 +389,18 @@ func Run() error {
 			go retroBitmaps() // rendered before Now Playing first shows them
 		}
 		a.makeSources()
+		if overrides, err := betterlyrics.NewOverrideStore(userDataDir("betterlyrics-lyrics.json")); err != nil {
+			log.Printf("loading BetterLyrics lyric overrides: %v", err)
+		} else {
+			a.betterLyricsOverrides = overrides
+		}
 		// Before the window: on Windows it lays out its content as it is
 		// made, and the view asks the player what plays.
 		a.art = newArtCache(a.post)
 		a.pl = player.New(a.post)
+		a.pl.LyricsOverride = func(track music.Track) *music.Lyrics {
+			return a.betterLyricsOverrides.Get(a.betterLyricsSongKey(track))
+		}
 		a.pl.Quiet = func(fn func()) { mygo.RunOnMain(fn) }
 		a.pl.Source = a.sourceByID
 		a.pl.Failed = a.sourceFailed

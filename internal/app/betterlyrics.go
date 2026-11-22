@@ -1,12 +1,16 @@
 package app
 
 import (
+	"context"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
 
 	"mygo-music/internal/betterlyrics"
+	"mygo-music/internal/local"
+	"mygo-music/internal/music"
 )
 
 func (a *app) setBetterLyricsIntegration() {
@@ -15,9 +19,36 @@ func (a *app) setBetterLyricsIntegration() {
 		return
 	}
 	if a.betterLyricsServer != nil {
+		a.betterLyricsServer.SetLyricsWriteEnabled(a.settings.BetterLyricsLyricsWrite)
 		return
 	}
-	server := betterlyrics.NewServer()
+	server := betterlyrics.NewServer(a.betterLyricsOverrides)
+	server.SetLyricsWriteEnabled(a.settings.BetterLyricsLyricsWrite)
+	// 校验与写入在主线程执行，避免 HTTP 快照尚未刷新时把旧请求写到已切换的歌曲。
+	server.SetOverrideDispatcher(func(ctx context.Context, operation func()) error {
+		done := make(chan struct{})
+		a.post(func() {
+			defer close(done)
+			if ctx.Err() != nil {
+				return
+			}
+			a.publishBetterLyrics()
+			if a.betterLyricsServer == server {
+				operation()
+			}
+		})
+		select {
+		case <-done:
+			return ctx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	server.SetLyricsOverrideChanged(func(key betterlyrics.SongKey) {
+		if a.pl != nil && a.pl.Current() != nil && a.betterLyricsSongKey(*a.pl.Current()) == key {
+			a.pl.ReloadLyrics()
+		}
+	})
 	if err := server.Start(betterlyrics.DefaultAddress); err != nil {
 		a.betterLyricsStatus = Tf("Could not start BetterLyrics integration: %s", err)
 		log.Printf("starting BetterLyrics integration: %v", err)
@@ -29,6 +60,44 @@ func (a *app) setBetterLyricsIntegration() {
 	a.publishBetterLyrics()
 	a.scheduleBetterLyricsSync()
 	a.redraw()
+}
+
+func (a *app) betterLyricsSongKey(track music.Track) betterlyrics.SongKey {
+	if track.Source == local.ID {
+		if a.local == nil {
+			return betterlyrics.SongKey{}
+		}
+		return betterlyrics.LocalSongKey(a.local.TrackPath(track.ID))
+	}
+	key := betterlyrics.KeyForTrack(track)
+	if track.ID == "" && strings.HasPrefix(key.StableID, "metadata:") && a.pl != nil {
+		matches := 0
+		for _, candidate := range a.pl.Queue() {
+			if betterlyrics.KeyForTrack(candidate) == key {
+				matches++
+			}
+		}
+		// 无来源 ID 时宁可拒绝重复候选，也不把同名不同版本的覆盖混用。
+		if matches != 1 {
+			return betterlyrics.SongKey{}
+		}
+	}
+	return key
+}
+
+func (a *app) clearBetterLyricsOverride() {
+	if a.pl == nil || a.pl.Current() == nil || a.betterLyricsOverrides == nil {
+		return
+	}
+	if err := a.betterLyricsOverrides.Delete(a.betterLyricsSongKey(*a.pl.Current())); err != nil {
+		a.toast = T("Could not restore source lyrics")
+		return
+	}
+	if a.betterLyricsServer != nil {
+		a.betterLyricsServer.InvalidateLyrics()
+	}
+	a.pl.ReloadLyrics()
+	a.publishBetterLyrics()
 }
 
 func (a *app) stopBetterLyricsIntegration() {
@@ -92,6 +161,7 @@ func (a *app) publishBetterLyrics() {
 		}
 		status = betterlyrics.Status{
 			TrackID:    a.betterLyricsTrackID,
+			SongKey:    a.betterLyricsSongKey(*track),
 			Title:      track.Name,
 			Artist:     track.ArtistNames(),
 			Album:      track.Album.Name,
@@ -100,8 +170,14 @@ func (a *app) publishBetterLyrics() {
 			DurationMs: a.pl.Duration().Milliseconds(),
 		}
 		if source, loaded := a.pl.LyricsSource(); loaded && source != nil {
+			origin := ""
+			if a.betterLyricsOverrides != nil && a.betterLyricsOverrides.Has(status.SongKey) {
+				origin = "override"
+			}
 			lyrics = &betterlyrics.Lyrics{
 				TrackID:     status.TrackID,
+				SongKey:     status.SongKey,
+				Origin:      origin,
 				LRC:         source.LRC,
 				Translation: source.Translation,
 				Lines:       source.Lines,
