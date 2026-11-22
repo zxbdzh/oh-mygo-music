@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -9,6 +10,29 @@ import (
 	"mygo-music/internal/lyrics"
 	"mygo-music/internal/music"
 )
+
+// 大歌单恢复位置后，静止列表不能因恢复逻辑而持续请求新帧。
+func TestNavigationFrameBudget(t *testing.T) {
+	a, _ := navigationApp()
+	tracks := make([]music.Track, 10000)
+	for index := range tracks {
+		tracks[index] = song(fmt.Sprint(index), fmt.Sprintf("大歌单歌曲%05d", index))
+	}
+	a.playlists["long"].Tracks = tracks
+	a.pl.Cue(tracks[:1])
+	tester := ui.NewTester(a.view, 1200, 800)
+	tester.SetPreferences(ui.Preferences{ReduceMotion: true})
+	settled(tester)
+	tester.Scroll(650, 420, 0, 20000)
+	settled(tester)
+	a.open(route{page: pageAlbum, id: "detail"})
+	settled(tester)
+	tester.Key(0, ui.KeyBack)
+	settled(tester)
+	if count := framesAt(a, tester, 0); count > 1 {
+		t.Fatalf("restored idle list requested %d frames per second", count)
+	}
+}
 
 // playingApp is an app playing a track with lyrics, at a position the test
 // sets with pl.Seek, and the number of times its view was built.

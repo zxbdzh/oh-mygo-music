@@ -131,6 +131,11 @@ type browseRow struct {
 	from, to int
 }
 
+type browseTrackKey struct {
+	section int
+	track   trackRowKey
+}
+
 type rowKind int
 
 const (
@@ -190,6 +195,22 @@ func (a *app) browseRows(c *ui.Context, page *music.Browse, pageID string, heade
 	top, bottom := a.insets(c)
 	a.underTop, a.underBottom = true, true
 	rows := len(layout) + 1
+	keys := make([]any, rows)
+	keys[0] = "header"
+	counts := make(map[browseTrackKey]int)
+	for index, row := range layout {
+		keys[index+1] = row
+		if row.kind == rowTrack {
+			track := page.Sections[row.section].Tracks[row.from]
+			key := browseTrackKey{row.section, trackRowKey{source: track.Source, id: track.ID}}
+			occurrence := counts[key]
+			counts[key]++
+			key.track.occurrence = occurrence
+			keys[index+1] = key
+		}
+	}
+	a.trackList.Key = func(index int) any { return keys[index] }
+	a.rowKeys = trackRowKeys{}
 	now := c.Now()
 	ui.List(c.Key(a.route), &a.trackList, rows, func(i int) {
 		if i == 0 {

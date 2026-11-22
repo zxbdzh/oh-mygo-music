@@ -28,6 +28,9 @@ func (a *app) aggregateLibrary(c *ui.Context, lib *library, p palette, _ bool) {
 	view := a.aggregateViews[lib]
 	if view == nil || view.owner != nil && (view.owner != src || view.page != a.route) {
 		view = &aggregateView{kind: "All", platform: "All", list: "All"}
+		if filters := a.pageFilters; filters.kind != "" {
+			view.kind, view.platform, view.list, view.query = filters.kind, filters.platform, filters.list, filters.query
+		}
 		a.aggregateViews[lib] = view
 	}
 	view.owner, view.page = src, a.route
@@ -57,7 +60,13 @@ func (a *app) aggregateLibrary(c *ui.Context, lib *library, p palette, _ bool) {
 					ui.Text(c, T("Updating aggregate data…")).FontSize(12).TextColor(p.muted)
 				}
 			})
+			before := aggregateFilterState{view.kind, view.platform, view.list, view.query}
 			a.aggregateLibraryFilters(c, view, platforms, lists, p)
+			a.pageFilters = aggregateFilterState{view.kind, view.platform, view.list, view.query}
+			if a.pageFilters != before {
+				// 仅保存筛选条件；选中、展开和在途操作仍随视图销毁，新结果从顶部开始。
+				a.pageScroll.X, a.pageScroll.Y = 0, 0
+			}
 			ui.Row(c.Key("aggregate-refresh-controls")).Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
 				if ui.PrimaryButton(c.Key("refresh-cloud-lists"), T("Refresh Cloud Lists")).Height(32).Radius(6).Disabled(view.busy).Clicked() {
 					a.aggregateLibraryFetch(lib, src, true)

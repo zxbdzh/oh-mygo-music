@@ -385,11 +385,8 @@ func (a *app) pageTop(c *ui.Context) {
 }
 
 func (a *app) content(c *ui.Context) {
-	// A new page starts at its top. Not as it is opened: a control in a
-	// list, as a page's tabs in its header, opens it as the list builds.
-	if a.scrolled != a.route {
-		a.trackList, a.pageScroll, a.scrolled = ui.ListState{}, ui.ScrollState{}, a.route
-	}
+	// 切页动作可能发生在列表头构建中，等下一次构建再交换页面状态。
+	a.restorePagePosition()
 	// Pages mark where their content is, as they scroll.
 	a.underTop, a.underBottom = false, false
 	switch a.route.page {

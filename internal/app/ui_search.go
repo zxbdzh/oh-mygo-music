@@ -45,13 +45,14 @@ func (a *app) search(q string) {
 // searchFor opens the page of a search, remembering its query. Searched
 // for again, it loads anew.
 func (a *app) searchFor(r route) {
+	if r.src == "" {
+		r.src = a.route.src
+	}
 	a.rememberSearch(r.query)
 	a.dismissSuggestions()
-	if r == a.route {
-		a.nowPlaying = false
-		a.loadSearch(r, true)
-		return
-	}
+	a.resetPagePosition(r)
+	// 显式搜索与历史返回不同：先换数据，再 open，避免缓存命中或重复发出首屏请求。
+	a.loadSearch(r, true)
 	a.open(r)
 }
 
@@ -203,6 +204,7 @@ func (a *app) searchHeader(c *ui.Context, d *searchData) {
 	ui.Row(c).Margin(0, 0, 18, 0).Children(func() {
 		if segmented(c.Key("kind"), &at, labels...) {
 			r.kind = kinds[at]
+			a.resetPagePosition(r)
 			a.show(r)
 		}
 	})

@@ -87,6 +87,7 @@ func (a *app) loadAccount(lib *library) {
 
 // afterAccount loads anew what's personal to who listens to a source.
 func (a *app) afterAccount(lib *library) {
+	a.discardPagePositions(lib)
 	lib.accountAsked = true
 	lib.forget()
 	lib.mine, lib.saved, lib.home, lib.recent = nil, nil, nil, nil

@@ -106,12 +106,19 @@ type app struct {
 	settingSaves   map[*library]<-chan struct{} // source save order, main thread only
 	settingPending map[string]*settingWrite     // last queued value per source/key
 
-	trackList ui.ListState
+	trackList        ui.ListState
+	rowKeys          trackRowKeys
+	pageFocus        trackRowFocus
+	pageFocusHandle  ui.Handle
+	pageFilters      aggregateFilterState
+	artistTab        int
+	restoreArtistTab bool
 	// Where the page and the sidebar are scrolled, kept while Now Playing
 	// covers them, unbuilt.
 	pageScroll ui.ScrollState
 	navScroll  ui.ScrollState
-	scrolled   route // the page trackList and pageScroll are of
+	scrolled   pageIdentity // the page trackList and pageScroll are of
+	positions  []pagePosition
 
 	mineCollapsed, savedCollapsed bool
 
@@ -311,6 +318,7 @@ func (a *app) enabledChanged() {
 	}
 	for _, lib := range previous {
 		if a.libOf(lib.id) != lib {
+			a.discardPagePositions(lib)
 			lib.forgetPages()
 			lib.started = false
 		}

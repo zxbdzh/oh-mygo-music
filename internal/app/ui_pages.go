@@ -458,6 +458,17 @@ func (a *app) trackRows(c *ui.Context, tracks []music.Track, covers bool, header
 	// scrolled away from its start or end has content under the bars.
 	a.underTop, a.underBottom = true, true
 	rows := len(tracks) + 1 + len(footer)
+	a.rowKeys.update(tracks)
+	keys := a.rowKeys.keys
+	a.trackList.Key = func(row int) any {
+		if row == 0 {
+			return "header"
+		}
+		if row > 0 && row <= len(keys) {
+			return keys[row-1]
+		}
+		return row - len(keys) // 页头与页尾不与歌曲键共用身份。
+	}
 	ui.List(c.Key(a.route), &a.trackList, rows, func(i int) {
 		if i == 0 {
 			ui.Column(c).Children(func() {
@@ -516,12 +527,13 @@ func (a *app) trackRowPlay(c *ui.Context, tracks []music.Track, i int, covers bo
 	// 歌曲行内有独立入口，以组合控件暴露子项，避免专辑和收藏被父按钮折叠。
 	row := ui.ButtonBase(c.Key(tr.ID)).Role(ui.RoleGroup).Height(54).PaddingX(12).Gap(14).Radius(10).AlignItems(ui.Center).FocusRing(false).Label(tr.Name).
 		ContextMenu(a.songItems(tr, pid))
+	a.trackFocus(c, row, tracks, i)
 	hovered := row.Hovered()
 	bg := ui.Transparent
 	switch {
 	case playing:
 		bg = p.accent.Alpha(0.09)
-	case hovered:
+	case hovered || row.Focused():
 		bg = p.hover
 	}
 	row.Background(row.AnimateColor("bg", bg, ui.Animation{Duration: 100 * time.Millisecond}))
