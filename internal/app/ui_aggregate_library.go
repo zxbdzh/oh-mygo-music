@@ -52,7 +52,7 @@ func (a *app) aggregateLibrary(c *ui.Context, lib *library, p palette, _ bool) {
 			if a.aggregateViews[lib] == view {
 				delete(a.aggregateViews, lib)
 			}
-		}).Gap(16).Children(func() {
+		}).Gap(12).Children(func() {
 			ui.Row(c.Key("aggregate-hero")).Gap(12).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Size(44, 44).Radius(13).Center().Background(p.accent.Alpha(0.12)).Children(func() {
 					ui.Icon(c, iconPlaylist).Size(22, 22).TextColor(p.accent)
@@ -115,6 +115,7 @@ func (a *app) aggregateLibrary(c *ui.Context, lib *library, p palette, _ bool) {
 					continue
 				}
 				shown += len(filtered)
+				sectionKey := aggregateSectionIdentity(sectionIndex, section.Title)
 				ui.Column(c.Key("aggregate-section-"+section.Title)).Gap(0).Radius(12).Background(p.bg).Border(1, p.hairline).Dividers(1, p.hairline).Children(func() {
 					ui.Row(c.Key("aggregate-section-heading-"+section.Title)).Padding(10, 12).Gap(8).AlignItems(ui.Center).Background(p.hover).Children(func() {
 						ui.Icon(c, iconPlaylist).Size(16, 16).TextColor(p.muted)
@@ -137,59 +138,66 @@ func (a *app) aggregateLibrary(c *ui.Context, lib *library, p palette, _ bool) {
 								view.err = ""
 								a.pl.PlayTrack(queue, trackIndex)
 							})
-							expanded := view.expandedTrack == aggregateTrackIdentity(track)
-							ui.Row(c.Key("aggregate-source-"+track.ID)).Gap(8).Padding(0, 12, 8, 12).AlignItems(ui.Center).Children(func() {
-								ui.Text(c, aggregateTrackSourceSummary(track)).FontSize(11).TextColor(p.muted).SingleLine().Grow(1).MinWidth(0)
-								if iconButton(c.Key("aggregate-details-"+track.ID), iconDown, 14, p.muted, aggregateTrackDetailsLabel(expanded, track.Name)).Clicked() {
-									if expanded {
-										view.expandedTrack = ""
-									} else {
-										view.expandedTrack = aggregateTrackIdentity(track)
-									}
-								}
-								if track.AggregateManual {
-									ui.Text(c, T("Manually linked")).FontSize(11).TextColor(p.accent)
-									for _, link := range track.AggregateLinks {
-										left, right := link.Left, link.Right
-										if iconButton(c.Key("revoke-"+track.ID+left.Platform+left.TrackID+right.Platform+right.TrackID), iconX, 14, p.muted, T("Revoke Link")+" "+left.Platform+" + "+right.Platform).Disabled(view.busy).Clicked() {
-											a.aggregateLibraryAction(lib, src, view, "revokeLink", map[string]any{"left": left, "right": right})
+							expanded := view.expandedTracks != nil && view.expandedTracks[sectionKey] == aggregateTrackIdentity(track)
+							ui.Row(c.Key("aggregate-track-meta-"+track.ID)).Wrap().Gap(8).Padding(0, 12, 8, 12).AlignItems(ui.Center).Children(func() {
+								ui.Row(c.Key("aggregate-source-" + track.ID)).Gap(8).AlignItems(ui.Center).Grow(1).MinWidth(180).Children(func() {
+									ui.Text(c, aggregateTrackSourceSummary(track)).FontSize(11).TextColor(p.muted).SingleLine().Grow(1).MinWidth(0)
+									if iconButton(c.Key("aggregate-details-"+track.ID), iconDown, 14, p.muted, aggregateTrackDetailsLabel(expanded, track.Name)).Clicked() {
+										if view.expandedTracks == nil {
+											view.expandedTracks = map[string]string{}
+										}
+										if expanded {
+											delete(view.expandedTracks, sectionKey)
+										} else {
+											view.expandedTracks[sectionKey] = aggregateTrackIdentity(track)
 										}
 									}
-								}
-								if view.busy {
-									return
-								}
-								source := aggregateViewSource(c, view, track)
-								if source.TrackID == "" {
-									return
-								}
-								a.aggregateWriteButton(c, src, view, track, source)
-								selected := len(view.selected) == 1 && sameAggregateSource(view.selected[0], source)
-								if selected {
-									ui.Text(c, T("Selected as first track")).FontSize(11).TextColor(p.accent)
-									return
-								}
-								if len(view.selected) == 0 {
-									if iconButton(c.Key("select-link-"+track.ID), iconLink, 14, p.muted, T("Select for Link")+" "+source.Platform).Clicked() {
-										view.selected = []music.AggregateSource{source}
-									}
-									return
-								}
-								left := view.selected[0]
-								if sameAggregateSource(left, source) {
-									return
-								}
-								link := ui.ButtonBase(c.Key("confirm-link-" + track.ID)).Height(30).PaddingX(10).Gap(6).Radius(7).AlignItems(ui.Center).Label(T("Link Same Recording") + " " + left.Platform + " + " + source.Platform).TextColor(p.accent)
-								if link.Hovered() {
-									link.Background(p.accent.Alpha(0.1))
-								}
-								link.Children(func() {
-									ui.Icon(c, iconLink).Size(14, 14)
-									ui.Text(c, T("Link Same Recording")).FontSize(11.5).FontWeight(600).SingleLine()
 								})
-								if link.Clicked() {
-									a.aggregateLibraryAction(lib, src, view, "confirmLink", map[string]any{"left": left, "right": source})
-								}
+								ui.Row(c.Key("aggregate-actions-" + track.ID)).Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
+									if track.AggregateManual {
+										ui.Text(c, T("Manually linked")).FontSize(11).TextColor(p.accent)
+										for _, link := range track.AggregateLinks {
+											left, right := link.Left, link.Right
+											if iconButton(c.Key("revoke-"+track.ID+left.Platform+left.TrackID+right.Platform+right.TrackID), iconX, 14, p.muted, T("Revoke Link")+" "+left.Platform+" + "+right.Platform).Disabled(view.busy).Clicked() {
+												a.aggregateLibraryAction(lib, src, view, "revokeLink", map[string]any{"left": left, "right": right})
+											}
+										}
+									}
+									if view.busy {
+										return
+									}
+									source := aggregateViewSource(c, view, track)
+									if source.TrackID == "" {
+										return
+									}
+									a.aggregateWriteButton(c, src, view, track, source)
+									selected := len(view.selected) == 1 && sameAggregateSource(view.selected[0], source)
+									if selected {
+										ui.Text(c, T("Selected as first track")).FontSize(11).TextColor(p.accent)
+										return
+									}
+									if len(view.selected) == 0 {
+										if iconButton(c.Key("select-link-"+track.ID), iconLink, 14, p.muted, T("Select for Link")+" "+source.Platform).Clicked() {
+											view.selected = []music.AggregateSource{source}
+										}
+										return
+									}
+									left := view.selected[0]
+									if sameAggregateSource(left, source) {
+										return
+									}
+									link := ui.ButtonBase(c.Key("confirm-link-" + track.ID)).Height(30).PaddingX(10).Gap(6).Radius(7).AlignItems(ui.Center).Label(T("Link Same Recording") + " " + left.Platform + " + " + source.Platform).TextColor(p.accent)
+									if link.Hovered() {
+										link.Background(p.accent.Alpha(0.1))
+									}
+									link.Children(func() {
+										ui.Icon(c, iconLink).Size(14, 14)
+										ui.Text(c, T("Link Same Recording")).FontSize(11.5).FontWeight(600).SingleLine()
+									})
+									if link.Clicked() {
+										a.aggregateLibraryAction(lib, src, view, "confirmLink", map[string]any{"left": left, "right": source})
+									}
+								})
 							})
 							if expanded {
 								a.aggregateTrackDetails(c, track, p)
@@ -216,35 +224,47 @@ func (a *app) aggregateLibraryFilters(c *ui.Context, view *aggregateView, platfo
 	ui.Column(c.Key("aggregate-filter-card")).Gap(10).Padding(12).Radius(8).Background(p.hover).Border(1, p.hairline).Children(func() {
 		ui.Row(c.Key("aggregate-filter-heading")).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, iconSearch).Size(15, 15).TextColor(p.muted)
-			ui.Text(c, T("Content")).FontSize(12).FontWeight(600).TextColor(p.muted)
+			ui.Text(c, T("Filters")).FontSize(12).FontWeight(600).TextColor(p.muted)
 		})
-		ui.Column(c.Key("aggregate-kind-field")).Gap(4).Children(func() {
-			ui.Text(c, T("Content")).FontSize(11).TextColor(p.muted)
+		ui.Row(c.Key("aggregate-kind-field")).AlignItems(ui.Center).Children(func() {
 			kind := aggregateKindIndex(view.kind)
-			if segmented(c.Key("aggregate-kind-segment"), &kind, "All", T("Liked"), T("Playlists")) {
+			if segmented(c.Key("aggregate-kind-segment"), &kind, T("All"), T("Liked"), T("Playlists")) {
 				view.kind = aggregateKindValue(kind)
 			}
 		})
 		drawSelect := func(key, label string, value *string, options []string, width float32) {
-			ui.Column(c.Key(key + "-field")).Gap(4).Grow(1).MinWidth(0).Children(func() {
+			ui.Column(c.Key(key + "-field")).Gap(4).Width(width).Shrink(1).Children(func() {
 				ui.Text(c, T(label)).FontSize(11).TextColor(p.muted)
-				ui.Select(c.Key(key), value, options).Label(T(label)).Width(width).Disabled(view.busy)
+				selected := *value
+				if selected == "All" {
+					selected = T("All")
+				}
+				selector := ui.Select(c.Key(key), &selected, append([]string{T("All")}, options...)).
+					Label(T(label)).Width(width).Disabled(view.busy)
+				if selector.Changed() {
+					if selected == T("All") {
+						selected = "All"
+					}
+					*value = selected
+				}
 			})
 		}
+		platformWidth, listWidth := float32(150), float32(220)
 		if compact {
-			ui.Row(c.Key("aggregate-filter-selects")).Wrap().Gap(8).Children(func() {
-				drawSelect("aggregate-platform", "Platform", &view.platform, append([]string{"All"}, platforms...), 170)
-				drawSelect("aggregate-list", "Source List", &view.list, append([]string{"All"}, lists...), 220)
-			})
-		} else {
-			ui.Row(c.Key("aggregate-filter-selects")).Gap(8).Children(func() {
-				drawSelect("aggregate-platform", "Platform", &view.platform, append([]string{"All"}, platforms...), 150)
-				drawSelect("aggregate-list", "Source List", &view.list, append([]string{"All"}, lists...), 200)
-			})
+			platformWidth, listWidth = 150, 220
 		}
+		ui.Row(c.Key("aggregate-filter-selects")).Wrap().Gap(8).Children(func() {
+			drawSelect("aggregate-platform", "Platform", &view.platform, platforms, platformWidth)
+			drawSelect("aggregate-list", "Source List", &view.list, lists, listWidth)
+		})
 		ui.Column(c.Key("aggregate-query-field")).Gap(4).Children(func() {
 			ui.Text(c, T("Filter Tracks")).FontSize(11).TextColor(p.muted)
-			ui.TextInput(c.Key("aggregate-query"), &view.query).Label(T("Filter Tracks")).Grow(1).MinWidth(0).Disabled(view.busy)
+			ui.Row(c.Key("aggregate-query-row")).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.TextInput(c.Key("aggregate-query"), &view.query).Label(T("Filter Tracks")).Grow(1).MinWidth(0).Disabled(view.busy)
+				if view.query != "" && iconButton(c.Key("clear-aggregate-query"), iconX, 14, p.muted, T("Clear Search")).Disabled(view.busy).Clicked() {
+					view.query = ""
+				}
+			})
 		})
 	})
 }
@@ -285,7 +305,11 @@ func aggregateTrackSourceSummary(track *music.Track) string {
 		seen[source.Platform] = true
 		platforms = append(platforms, aggregatePlatformName(source.Platform))
 	}
-	return strings.Join(platforms, " · ") + " · " + fmt.Sprintf("%d %s", len(sources), T("Source List"))
+	summary := strings.Join(platforms, " · ") + " · " + fmt.Sprintf("%d %s", len(sources), T("Sources"))
+	if memberships := aggregateSourceListCount(track.AggregateSources); memberships > 0 {
+		summary += " · " + fmt.Sprintf("%d %s", memberships, T("List memberships"))
+	}
+	return summary
 }
 
 func aggregateTrackDetailsLabel(expanded bool, name string) string {
@@ -299,23 +323,77 @@ func (a *app) aggregateTrackDetails(c *ui.Context, track *music.Track, p palette
 	ui.Column(c.Key("aggregate-track-details-"+aggregateTrackIdentity(track))).
 		Gap(6).Padding(8, 12, 10, 12).Background(p.hover).Children(func() {
 		ui.Text(c, T("Recording Source")).FontSize(11).FontWeight(600).TextColor(p.muted)
-		for _, source := range uniqueAggregateSources(track.AggregateSources) {
-			meta := aggregatePlatformName(source.Platform)
-			if source.AccountID != "" {
-				meta += " · " + source.AccountID
-			}
-			if source.ListName != "" {
-				meta += " · " + source.ListName
-			}
-			ui.Row(c).Gap(8).Padding(4, 0).Children(func() {
-				ui.Text(c, meta).FontSize(11.5).TextColor(p.text).SingleLine().Grow(1).MinWidth(0)
-				ui.Text(c, source.TrackID).FontSize(11).TextColor(p.muted).SingleLine()
+		for _, detail := range aggregateSourceDetails(track.AggregateSources) {
+			source := detail.source
+			ui.Column(c.Key("aggregate-source-detail-"+aggregateSourceKey(source))).Gap(3).Padding(4, 0).Children(func() {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					meta := aggregatePlatformName(source.Platform)
+					if source.AccountID != "" {
+						meta += " · " + source.AccountID
+					}
+					ui.Text(c, meta).FontSize(11.5).TextColor(p.text).SingleLine().Grow(1).MinWidth(0)
+					ui.Text(c, source.TrackID).FontSize(11).TextColor(p.muted).SingleLine()
+				})
+				ui.Text(c, T("Source List")+" · "+strings.Join(detail.lists, " · ")).FontSize(11).TextColor(p.muted).SingleLine()
 			})
 		}
 		if track.AggregateManual {
 			ui.Text(c, T("Manually linked")).FontSize(11).TextColor(p.accent)
 		}
 	})
+}
+
+type aggregateSourceDetail struct {
+	source music.AggregateSource
+	lists  []string
+}
+
+func aggregateSectionIdentity(index int, title string) string {
+	return fmt.Sprintf("%d\x00%s", index, title)
+}
+
+func aggregateSourceDetails(sources []music.AggregateSource) []aggregateSourceDetail {
+	details := make([]aggregateSourceDetail, 0, len(sources))
+	indexes := make(map[string]int, len(sources))
+	memberships := make(map[string]map[string]bool, len(sources))
+	for _, source := range sources {
+		key := aggregateSourceKey(source)
+		index, ok := indexes[key]
+		if !ok {
+			index = len(details)
+			indexes[key] = index
+			memberships[key] = map[string]bool{}
+			details = append(details, aggregateSourceDetail{source: source})
+		}
+		listName := source.ListName
+		if listName == "" {
+			listName = source.ListID
+		}
+		if listName == "" {
+			listName = T("Source List")
+		}
+		membershipKey := source.ListID
+		if membershipKey == "" {
+			membershipKey = listName
+		}
+		if !memberships[key][membershipKey] {
+			memberships[key][membershipKey] = true
+			details[index].lists = append(details[index].lists, listName)
+		}
+	}
+	return details
+}
+
+func aggregateSourceListCount(sources []music.AggregateSource) int {
+	seen := make(map[string]bool, len(sources))
+	for _, source := range sources {
+		key := source.Platform + "\x00" + source.AccountID + "\x00" + source.ListID
+		if source.ListID == "" {
+			key += "\x00" + source.ListName
+		}
+		seen[key] = true
+	}
+	return len(seen)
 }
 
 func (a *app) aggregateLibraryStatus(c *ui.Context, home *music.Browse, view *aggregateView, p palette) {
@@ -536,7 +614,11 @@ func aggregateViewSource(c *ui.Context, view *aggregateView, track *music.Track)
 		byLabel[label] = source
 	}
 	current := aggregateIdentityLabel(byKeyAggregateSource(sources, selected))
-	ui.Select(c.Key("aggregate-source-choice-"+identity), &current, labels).Label(T("Recording Source")).Width(260)
+	width := float32(260)
+	if contentWidth, _ := c.Size(); contentWidth < 720 {
+		width = 220
+	}
+	ui.Select(c.Key("aggregate-source-choice-"+identity), &current, labels).Label(T("Recording Source")).Width(width)
 	if source, ok := byLabel[current]; ok {
 		// 默认展示不算显式选择，不能用来源排列覆盖插件保存的稳定锚点。
 		if current != aggregateIdentityLabel(byKeyAggregateSource(sources, selected)) {

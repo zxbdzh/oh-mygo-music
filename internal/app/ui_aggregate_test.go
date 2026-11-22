@@ -163,7 +163,7 @@ func TestAggregateFilteredTrackPlaysFullSectionQueue(t *testing.T) {
 	}
 }
 
-// 聚合曲库的详情只展开一项，切换曲目后旧详情必须收起，避免长列表失去层次。
+// 聚合曲库同一来源列表分组只展开一项，切换曲目后旧详情必须收起。
 func TestAggregateTrackDetailsKeepOneExpandedRow(t *testing.T) {
 	a, _, _, _ := aggregateFixture(t)
 	a.library.home = &music.Browse{Sections: []music.Section{{Title: "Saved", Tracks: []music.Track{
@@ -188,6 +188,56 @@ func TestAggregateTrackDetailsKeepOneExpandedRow(t *testing.T) {
 	}
 	if _, ok := tt.Access("Recording Source Detail Two"); !ok {
 		t.Fatal("第二首曲目的详情没有展开")
+	}
+}
+
+// 不同来源列表分组可以各自展开详情，避免一个分组的操作影响另一个分组。
+func TestAggregateTrackDetailsExpandIndependentlyPerSection(t *testing.T) {
+	a, _, _, _ := aggregateFixture(t)
+	a.library.home = &music.Browse{Sections: []music.Section{
+		{Title: "Saved", Tracks: []music.Track{{
+			ID: "saved-detail", Name: "Saved Detail",
+			AggregateSources: []music.AggregateSource{{Platform: "wy", AccountID: "account-a", TrackID: "saved-detail", ListID: "liked", ListName: "Liked"}},
+		}}},
+		{Title: "Road", Tracks: []music.Track{{
+			ID: "road-detail", Name: "Road Detail",
+			AggregateSources: []music.AggregateSource{{Platform: "tx", AccountID: "account-b", TrackID: "road-detail", ListID: "road", ListName: "Road songs"}},
+		}}},
+	}}
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.aggregateLibrary(c, a.library, paletteFor(c.Theme()), false)
+	}, 760, 900)
+	tt.Frame()
+	if err := tt.Click("More Saved Detail"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("More Road Detail"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tt.Access("Recording Source Saved Detail"); !ok {
+		t.Fatal("展开第二个分组后第一个分组详情被错误收起")
+	}
+	if _, ok := tt.Access("Recording Source Road Detail"); !ok {
+		t.Fatal("第二个分组详情没有展开")
+	}
+}
+
+// 同一原始曲目出现在多个歌单时，详情仍保留全部列表归属并按来源身份合并。
+func TestAggregateSourceDetailsKeepListMemberships(t *testing.T) {
+	sources := []music.AggregateSource{
+		{Platform: "wy", AccountID: "account-a", TrackID: "track-1", ListID: "liked", ListName: "Liked"},
+		{Platform: "wy", AccountID: "account-a", TrackID: "track-1", ListID: "road", ListName: "Road songs"},
+		{Platform: "tx", AccountID: "account-b", TrackID: "track-2", ListID: "liked", ListName: "Liked"},
+	}
+	details := aggregateSourceDetails(sources)
+	if len(details) != 2 {
+		t.Fatalf("来源身份被列表归属重复拆分：%+v", details)
+	}
+	if len(details[0].lists) != 2 || details[0].lists[0] != "Liked" || details[0].lists[1] != "Road songs" {
+		t.Fatalf("第一来源没有保留全部列表归属：%+v", details[0])
+	}
+	if aggregateSourceListCount(sources) != 3 {
+		t.Fatalf("列表归属数量错误：%d", aggregateSourceListCount(sources))
 	}
 }
 
