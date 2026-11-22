@@ -475,14 +475,14 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 			row(T("Start in background at login"), T("Do not open the main window when the app starts at login"), func() {
 				ui.Switch(c.Key("open-at-login-background"), &s.LaunchAtLoginBackground).
 					Label(T("Start in background at login")).Disabled(!startupEnabled).OnClick(func() {
-						err := s.save()
-						a.startupBackgroundFailed = err != nil
-						if err != nil {
-							s.LaunchAtLoginBackground = !s.LaunchAtLoginBackground
-							log.Printf("save background startup setting: %v", err)
-						}
-						a.redraw()
-					})
+					err := s.save()
+					a.startupBackgroundFailed = err != nil
+					if err != nil {
+						s.LaunchAtLoginBackground = !s.LaunchAtLoginBackground
+						log.Printf("save background startup setting: %v", err)
+					}
+					a.redraw()
+				})
 			})
 			if a.startupBackgroundFailed {
 				block(T("Start in background at login"), func() {

@@ -295,7 +295,8 @@ func TestSearchPopupFrames(t *testing.T) {
 			tt.Frame()
 			img := tt.Image()
 			s := float32(img.Bounds().Dx()) / 1000
-			crop := image.Rect(0, 0, int((sidebarWidth+80)*s), int(300*s))
+			// 搜索移到顶栏后，截图需覆盖输入框及下方弹层，而非旧侧栏。
+			crop := image.Rect(int(sidebarWidth*s), 0, img.Bounds().Dx(), int(300*s))
 			out := image.NewRGBA(image.Rect(0, 0, crop.Dx(), crop.Dy()))
 			draw.Draw(out, out.Bounds(), img, crop.Min, draw.Src)
 			name := fmt.Sprintf("search-dark%v-typed%v.png", dark, typed)
