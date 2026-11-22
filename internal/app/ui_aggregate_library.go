@@ -38,158 +38,183 @@ func (a *app) aggregateLibrary(c *ui.Context, lib *library, p palette, _ bool) {
 	a.aggregateWriteLoadCapabilities(lib, src, view)
 	a.aggregateWriteLoadGenerations(lib, src, view)
 	platforms, lists := aggregateFilterOptions(lib.home)
-	ui.Column(c.Key(view)).OnUnmount(func() {
-		// 页面消失后不再续订；旧请求即使稍后回执，也不能写入重新打开的视图。
-		if a.aggregateViews[lib] == view {
-			delete(a.aggregateViews, lib)
-		}
-	}).Gap(16).PaddingX(12).Children(func() {
-		ui.Row(c.Key("aggregate-hero")).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Box(c).Size(44, 44).Radius(13).Center().Background(p.accent.Alpha(0.12)).Children(func() {
-				ui.Icon(c, iconPlaylist).Size(22, 22).TextColor(p.accent)
+	top, bottom := a.insets(c)
+	ui.Scroll(c.Key(view)).TrackScroll(&a.pageScroll).Grow(1).
+		Padding(top+pageGap, 20, bottom+48, 20).
+		ScrollbarInsets(top, 0, bottom, 0).Children(func() {
+		a.startMark(c)
+		defer a.endMark(c)
+		ui.Column(c.Key("aggregate-page")).OnUnmount(func() {
+			// 页面消失后不再续订；旧请求即使稍后回执，也不能写入重新打开的视图。
+			if a.aggregateViews[lib] == view {
+				delete(a.aggregateViews, lib)
+			}
+		}).Gap(16).Children(func() {
+			ui.Row(c.Key("aggregate-hero")).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Box(c).Size(44, 44).Radius(13).Center().Background(p.accent.Alpha(0.12)).Children(func() {
+					ui.Icon(c, iconPlaylist).Size(22, 22).TextColor(p.accent)
+				})
+				ui.Text(c, T("Oh MyGo Music Aggregate")).FontSize(19).FontWeight(700).LetterSpacing(-0.2)
+				ui.Box(c).Grow(1)
+				if view.busy {
+					ui.Text(c, T("Updating aggregate data…")).FontSize(12).TextColor(p.muted)
+				}
 			})
-			ui.Text(c, T("Oh MyGo Music Aggregate")).FontSize(24).FontWeight(700).LetterSpacing(-0.4)
-			ui.Box(c).Grow(1)
-			if view.busy {
-				ui.Text(c, T("Updating aggregate data…")).FontSize(12).TextColor(p.muted)
-			}
-		})
-		a.aggregateLibraryFilters(c, view, platforms, lists, p)
-		ui.Row(c.Key("aggregate-refresh-controls")).Gap(8).AlignItems(ui.Center).Children(func() {
-			if pillButton(c.Key("refresh-cloud-lists"), iconRefresh, T("Refresh Cloud Lists"), p.accent, p.onAccent).Disabled(view.busy).Clicked() {
-				a.aggregateLibraryFetch(lib, src, true)
-			}
-			if pillButton(c.Key("reload-local-cache"), iconRefresh, T("Reload Cached Data"), p.hover, p.text).Disabled(view.busy).Clicked() {
-				a.aggregateLibraryReload(lib, src)
-			}
-			ui.Box(c).Grow(1)
-			if accounts := aggregateWriteAccounts(view); len(accounts) > 0 {
-				button := ui.Button(c.Key("create-playlist"), T("Create Playlist")).Height(34).PaddingX(12).Radius(8).Disabled(view.busy)
-				button.Menu(func(m *ui.Menu) {
-					for _, account := range accounts {
-						account := account
-						label := aggregatePlatformName(account.platform) + " · " + account.accountID
-						if m.Item(label).Chosen() {
-							a.aggregateWriteStartCreate(src, view, account)
+			a.aggregateLibraryFilters(c, view, platforms, lists, p)
+			ui.Row(c.Key("aggregate-refresh-controls")).Gap(8).AlignItems(ui.Center).Children(func() {
+				if pillButton(c.Key("refresh-cloud-lists"), iconRefresh, T("Refresh Cloud Lists"), p.accent, p.onAccent).Disabled(view.busy).Clicked() {
+					a.aggregateLibraryFetch(lib, src, true)
+				}
+				if pillButton(c.Key("reload-local-cache"), iconRefresh, T("Reload Cached Data"), p.hover, p.text).Disabled(view.busy).Clicked() {
+					a.aggregateLibraryReload(lib, src)
+				}
+				ui.Box(c).Grow(1)
+				if accounts := aggregateWriteAccounts(view); len(accounts) > 0 {
+					button := ui.Button(c.Key("create-playlist"), T("Create Playlist")).Height(34).PaddingX(12).Radius(8).Disabled(view.busy)
+					button.Menu(func(m *ui.Menu) {
+						for _, account := range accounts {
+							account := account
+							label := aggregatePlatformName(account.platform) + " · " + account.accountID
+							if m.Item(label).Chosen() {
+								a.aggregateWriteStartCreate(src, view, account)
+							}
 						}
-					}
-				})
-			}
-		})
-		a.aggregateLibraryStatus(c, view, p)
-		a.aggregateLibraryCachedLists(c, lib, src, view, p)
-		if len(view.selected) > 0 {
-			ui.Row(c.Key("aggregate-link-selection")).Gap(8).Padding(8, 10).AlignItems(ui.Center).Radius(8).Background(p.accent.Alpha(0.08)).Children(func() {
-				ui.Icon(c, iconLink).Size(15, 15).TextColor(p.accent)
-				ui.Text(c, T("Select a second track to confirm the same recording.")).FontSize(12).TextColor(p.text).Grow(1)
-				if ui.Button(c.Key("cancel-link-selection"), T("Cancel Selection")).Height(30).PaddingX(10).Radius(7).Disabled(view.busy).Clicked() {
-					view.selected = nil
-				}
-			})
-		}
-		shown := 0
-		for sectionIndex := range lib.home.Sections {
-			section := &lib.home.Sections[sectionIndex]
-			filtered := make([]int, 0, len(section.Tracks))
-			for trackIndex, track := range section.Tracks {
-				if aggregateTrackMatches(track, *view) {
-					filtered = append(filtered, trackIndex)
-				}
-			}
-			if len(filtered) == 0 {
-				continue
-			}
-			shown += len(filtered)
-			ui.Column(c.Key("aggregate-section-"+section.Title)).Gap(0).Radius(12).Background(p.bg).Border(1, p.hairline).Dividers(1, p.hairline).Children(func() {
-				ui.Row(c.Key("aggregate-section-heading-"+section.Title)).Padding(10, 12).Gap(8).AlignItems(ui.Center).Background(p.hover).Children(func() {
-					ui.Icon(c, iconPlaylist).Size(16, 16).TextColor(p.muted)
-					ui.Text(c, section.Title).FontSize(16).FontWeight(700).TextColor(p.text).Grow(1)
-					ui.Text(c, fmt.Sprintf("%d", len(filtered))).FontSize(12).TextColor(p.muted)
-				})
-				for _, trackIndex := range filtered {
-					track := &section.Tracks[trackIndex]
-					ui.Column(c.Key([2]int{sectionIndex, trackIndex})).Gap(0).Children(func() {
-						// 播放器收到原 section 的完整切片，筛选只隐藏行，不改队列候选及顺序。
-						a.trackRowPlay(c, section.Tracks, trackIndex, true, "", func() {
-							if view.busy {
-								return
-							}
-							queue, err := aggregateQueueTracks(section.Tracks, view.sourceChoices)
-							if err != nil {
-								view.err = err.Error()
-								return
-							}
-							view.err = ""
-							a.pl.PlayTrack(queue, trackIndex)
-						})
-						ui.Row(c.Key("aggregate-source-"+track.ID)).Gap(8).Padding(0, 12, 8, 12).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, aggregateTrackSources(track)).FontSize(11).TextColor(p.muted).SingleLine().Grow(1).MinWidth(0)
-							if track.AggregateManual {
-								ui.Text(c, T("Manually linked")).FontSize(11).TextColor(p.accent)
-								for _, link := range track.AggregateLinks {
-									left, right := link.Left, link.Right
-									if iconButton(c.Key("revoke-"+track.ID+left.Platform+left.TrackID+right.Platform+right.TrackID), iconX, 14, p.muted, T("Revoke Link")+" "+left.Platform+" + "+right.Platform).Disabled(view.busy).Clicked() {
-										a.aggregateLibraryAction(lib, src, view, "revokeLink", map[string]any{"left": left, "right": right})
-									}
-								}
-							}
-							if view.busy {
-								return
-							}
-							source := aggregateViewSource(c, view, track)
-							if source.TrackID == "" {
-								return
-							}
-							a.aggregateWriteButton(c, src, view, track, source)
-							selected := len(view.selected) == 1 && sameAggregateSource(view.selected[0], source)
-							if selected {
-								ui.Text(c, T("Selected as first track")).FontSize(11).TextColor(p.accent)
-								return
-							}
-							if len(view.selected) == 0 {
-								if iconButton(c.Key("select-link-"+track.ID), iconLink, 14, p.muted, T("Select for Link")+" "+source.Platform).Clicked() {
-									view.selected = []music.AggregateSource{source}
-								}
-								return
-							}
-							left := view.selected[0]
-							if sameAggregateSource(left, source) {
-								return
-							}
-							link := ui.ButtonBase(c.Key("confirm-link-" + track.ID)).Height(30).PaddingX(10).Gap(6).Radius(7).AlignItems(ui.Center).Label(T("Link Same Recording") + " " + left.Platform + " + " + source.Platform).TextColor(p.accent)
-							if link.Hovered() {
-								link.Background(p.accent.Alpha(0.1))
-							}
-							link.Children(func() {
-								ui.Icon(c, iconLink).Size(14, 14)
-								ui.Text(c, T("Link Same Recording")).FontSize(11.5).FontWeight(600).SingleLine()
-							})
-							if link.Clicked() {
-								a.aggregateLibraryAction(lib, src, view, "confirmLink", map[string]any{"left": left, "right": source})
-							}
-						})
 					})
 				}
 			})
-		}
-		if shown == 0 {
-			ui.Column(c.Key("aggregate-empty")).Padding(28, 16).Radius(12).Background(p.hover).Children(func() {
-				ui.Icon(c, iconSearch).Size(22, 22).TextColor(p.muted)
-				ui.Text(c, T("No tracks match these filters.")).FontSize(13).TextColor(p.muted)
-			})
-		}
+			a.aggregateLibraryStatus(c, lib.home, view, p)
+			a.aggregateLibraryCachedLists(c, lib, src, view, p)
+			if len(view.selected) > 0 {
+				ui.Row(c.Key("aggregate-link-selection")).Gap(8).Padding(8, 10).AlignItems(ui.Center).Radius(8).Background(p.accent.Alpha(0.08)).Children(func() {
+					ui.Icon(c, iconLink).Size(15, 15).TextColor(p.accent)
+					ui.Text(c, T("Select a second track to confirm the same recording.")).FontSize(12).TextColor(p.text).Grow(1)
+					if ui.Button(c.Key("cancel-link-selection"), T("Cancel Selection")).Height(30).PaddingX(10).Radius(7).Disabled(view.busy).Clicked() {
+						view.selected = nil
+					}
+				})
+			}
+			shown := 0
+			for sectionIndex := range lib.home.Sections {
+				section := &lib.home.Sections[sectionIndex]
+				filtered := make([]int, 0, len(section.Tracks))
+				for trackIndex, track := range section.Tracks {
+					if aggregateTrackMatches(track, *view) {
+						filtered = append(filtered, trackIndex)
+					}
+				}
+				if len(filtered) == 0 {
+					continue
+				}
+				shown += len(filtered)
+				ui.Column(c.Key("aggregate-section-"+section.Title)).Gap(0).Radius(12).Background(p.bg).Border(1, p.hairline).Dividers(1, p.hairline).Children(func() {
+					ui.Row(c.Key("aggregate-section-heading-"+section.Title)).Padding(10, 12).Gap(8).AlignItems(ui.Center).Background(p.hover).Children(func() {
+						ui.Icon(c, iconPlaylist).Size(16, 16).TextColor(p.muted)
+						ui.Text(c, section.Title).FontSize(16).FontWeight(700).TextColor(p.text).Grow(1)
+						ui.Text(c, fmt.Sprintf("%d", len(filtered))).FontSize(12).TextColor(p.muted)
+					})
+					for _, trackIndex := range filtered {
+						track := &section.Tracks[trackIndex]
+						ui.Column(c.Key([2]int{sectionIndex, trackIndex})).Gap(0).Children(func() {
+							// 播放器收到原 section 的完整切片，筛选只隐藏行，不改队列候选及顺序。
+							a.trackRowPlay(c, section.Tracks, trackIndex, true, "", func() {
+								if view.busy {
+									return
+								}
+								queue, err := aggregateQueueTracks(section.Tracks, view.sourceChoices)
+								if err != nil {
+									view.err = err.Error()
+									return
+								}
+								view.err = ""
+								a.pl.PlayTrack(queue, trackIndex)
+							})
+							expanded := view.expandedTrack == aggregateTrackIdentity(track)
+							ui.Row(c.Key("aggregate-source-"+track.ID)).Gap(8).Padding(0, 12, 8, 12).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, aggregateTrackSourceSummary(track)).FontSize(11).TextColor(p.muted).SingleLine().Grow(1).MinWidth(0)
+								if iconButton(c.Key("aggregate-details-"+track.ID), iconDown, 14, p.muted, aggregateTrackDetailsLabel(expanded, track.Name)).Clicked() {
+									if expanded {
+										view.expandedTrack = ""
+									} else {
+										view.expandedTrack = aggregateTrackIdentity(track)
+									}
+								}
+								if track.AggregateManual {
+									ui.Text(c, T("Manually linked")).FontSize(11).TextColor(p.accent)
+									for _, link := range track.AggregateLinks {
+										left, right := link.Left, link.Right
+										if iconButton(c.Key("revoke-"+track.ID+left.Platform+left.TrackID+right.Platform+right.TrackID), iconX, 14, p.muted, T("Revoke Link")+" "+left.Platform+" + "+right.Platform).Disabled(view.busy).Clicked() {
+											a.aggregateLibraryAction(lib, src, view, "revokeLink", map[string]any{"left": left, "right": right})
+										}
+									}
+								}
+								if view.busy {
+									return
+								}
+								source := aggregateViewSource(c, view, track)
+								if source.TrackID == "" {
+									return
+								}
+								a.aggregateWriteButton(c, src, view, track, source)
+								selected := len(view.selected) == 1 && sameAggregateSource(view.selected[0], source)
+								if selected {
+									ui.Text(c, T("Selected as first track")).FontSize(11).TextColor(p.accent)
+									return
+								}
+								if len(view.selected) == 0 {
+									if iconButton(c.Key("select-link-"+track.ID), iconLink, 14, p.muted, T("Select for Link")+" "+source.Platform).Clicked() {
+										view.selected = []music.AggregateSource{source}
+									}
+									return
+								}
+								left := view.selected[0]
+								if sameAggregateSource(left, source) {
+									return
+								}
+								link := ui.ButtonBase(c.Key("confirm-link-" + track.ID)).Height(30).PaddingX(10).Gap(6).Radius(7).AlignItems(ui.Center).Label(T("Link Same Recording") + " " + left.Platform + " + " + source.Platform).TextColor(p.accent)
+								if link.Hovered() {
+									link.Background(p.accent.Alpha(0.1))
+								}
+								link.Children(func() {
+									ui.Icon(c, iconLink).Size(14, 14)
+									ui.Text(c, T("Link Same Recording")).FontSize(11.5).FontWeight(600).SingleLine()
+								})
+								if link.Clicked() {
+									a.aggregateLibraryAction(lib, src, view, "confirmLink", map[string]any{"left": left, "right": source})
+								}
+							})
+							if expanded {
+								a.aggregateTrackDetails(c, track, p)
+							}
+						})
+					}
+				})
+			}
+			if shown == 0 {
+				ui.Column(c.Key("aggregate-empty")).Padding(28, 16).Radius(12).Background(p.hover).Children(func() {
+					ui.Icon(c, iconSearch).Size(22, 22).TextColor(p.muted)
+					ui.Text(c, T("No tracks match these filters.")).FontSize(13).TextColor(p.muted)
+				})
+			}
+		})
 	})
 }
 
 func (a *app) aggregateLibraryFilters(c *ui.Context, view *aggregateView, platforms, lists []string, p palette) {
 	compact := false
-	if width, _ := c.Size(); width-sidebarWidth < 680 {
+	if width, _ := c.Size(); width < 760 {
 		compact = true
 	}
-	ui.Column(c.Key("aggregate-filter-card")).Gap(10).Padding(12).Radius(12).Background(p.hover).Border(1, p.hairline).Children(func() {
+	ui.Column(c.Key("aggregate-filter-card")).Gap(10).Padding(12).Radius(8).Background(p.hover).Border(1, p.hairline).Children(func() {
 		ui.Row(c.Key("aggregate-filter-heading")).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, iconSearch).Size(15, 15).TextColor(p.muted)
 			ui.Text(c, T("Content")).FontSize(12).FontWeight(600).TextColor(p.muted)
+		})
+		ui.Column(c.Key("aggregate-kind-field")).Gap(4).Children(func() {
+			ui.Text(c, T("Content")).FontSize(11).TextColor(p.muted)
+			kind := aggregateKindIndex(view.kind)
+			if segmented(c.Key("aggregate-kind-segment"), &kind, "All", T("Liked"), T("Playlists")) {
+				view.kind = aggregateKindValue(kind)
+			}
 		})
 		drawSelect := func(key, label string, value *string, options []string, width float32) {
 			ui.Column(c.Key(key + "-field")).Gap(4).Grow(1).MinWidth(0).Children(func() {
@@ -198,12 +223,12 @@ func (a *app) aggregateLibraryFilters(c *ui.Context, view *aggregateView, platfo
 			})
 		}
 		if compact {
-			drawSelect("aggregate-kind", "Content", &view.kind, []string{"All", "Liked", "Playlists"}, 170)
-			drawSelect("aggregate-platform", "Platform", &view.platform, append([]string{"All"}, platforms...), 170)
-			drawSelect("aggregate-list", "Source List", &view.list, append([]string{"All"}, lists...), 220)
+			ui.Row(c.Key("aggregate-filter-selects")).Wrap().Gap(8).Children(func() {
+				drawSelect("aggregate-platform", "Platform", &view.platform, append([]string{"All"}, platforms...), 170)
+				drawSelect("aggregate-list", "Source List", &view.list, append([]string{"All"}, lists...), 220)
+			})
 		} else {
 			ui.Row(c.Key("aggregate-filter-selects")).Gap(8).Children(func() {
-				drawSelect("aggregate-kind", "Content", &view.kind, []string{"All", "Liked", "Playlists"}, 150)
 				drawSelect("aggregate-platform", "Platform", &view.platform, append([]string{"All"}, platforms...), 150)
 				drawSelect("aggregate-list", "Source List", &view.list, append([]string{"All"}, lists...), 200)
 			})
@@ -215,7 +240,76 @@ func (a *app) aggregateLibraryFilters(c *ui.Context, view *aggregateView, platfo
 	})
 }
 
-func (a *app) aggregateLibraryStatus(c *ui.Context, view *aggregateView, p palette) {
+func aggregateKindIndex(kind string) int {
+	switch kind {
+	case "Liked":
+		return 1
+	case "Playlists":
+		return 2
+	default:
+		return 0
+	}
+}
+
+func aggregateKindValue(index int) string {
+	switch index {
+	case 1:
+		return "Liked"
+	case 2:
+		return "Playlists"
+	default:
+		return "All"
+	}
+}
+
+func aggregateTrackSourceSummary(track *music.Track) string {
+	sources := uniqueAggregateSources(track.AggregateSources)
+	if len(sources) == 0 {
+		return T("Source List")
+	}
+	platforms := make([]string, 0, len(sources))
+	seen := map[string]bool{}
+	for _, source := range sources {
+		if seen[source.Platform] {
+			continue
+		}
+		seen[source.Platform] = true
+		platforms = append(platforms, aggregatePlatformName(source.Platform))
+	}
+	return strings.Join(platforms, " · ") + " · " + fmt.Sprintf("%d %s", len(sources), T("Source List"))
+}
+
+func aggregateTrackDetailsLabel(expanded bool, name string) string {
+	if expanded {
+		return T("Recording Source") + " " + name
+	}
+	return T("More") + " " + name
+}
+
+func (a *app) aggregateTrackDetails(c *ui.Context, track *music.Track, p palette) {
+	ui.Column(c.Key("aggregate-track-details-"+aggregateTrackIdentity(track))).
+		Gap(6).Padding(8, 12, 10, 12).Background(p.hover).Children(func() {
+		ui.Text(c, T("Recording Source")).FontSize(11).FontWeight(600).TextColor(p.muted)
+		for _, source := range uniqueAggregateSources(track.AggregateSources) {
+			meta := aggregatePlatformName(source.Platform)
+			if source.AccountID != "" {
+				meta += " · " + source.AccountID
+			}
+			if source.ListName != "" {
+				meta += " · " + source.ListName
+			}
+			ui.Row(c).Gap(8).Padding(4, 0).Children(func() {
+				ui.Text(c, meta).FontSize(11.5).TextColor(p.text).SingleLine().Grow(1).MinWidth(0)
+				ui.Text(c, source.TrackID).FontSize(11).TextColor(p.muted).SingleLine()
+			})
+		}
+		if track.AggregateManual {
+			ui.Text(c, T("Manually linked")).FontSize(11).TextColor(p.accent)
+		}
+	})
+}
+
+func (a *app) aggregateLibraryStatus(c *ui.Context, home *music.Browse, view *aggregateView, p palette) {
 	messages := make([]string, 0, 4)
 	if message := aggregateRefreshMessage(view.refresh.State); message != "" {
 		messages = append(messages, message)
@@ -232,9 +326,7 @@ func (a *app) aggregateLibraryStatus(c *ui.Context, view *aggregateView, p palet
 	if view.loadingLists {
 		messages = append(messages, T("Loading cached lists…"))
 	}
-	if len(messages) == 0 {
-		return
-	}
+	summary := fmt.Sprintf("%d %s · %d %s", len(view.lists), T("Source List"), aggregateLibraryTrackCount(home), T("Songs"))
 	critical := view.refreshErr != "" || view.err != "" || view.writeGenerationErr != "" ||
 		view.refresh.State == "error" || view.refresh.State == "signIn"
 	color, background := p.muted, p.hover
@@ -244,11 +336,23 @@ func (a *app) aggregateLibraryStatus(c *ui.Context, view *aggregateView, p palet
 	ui.Row(c.Key("aggregate-status")).Gap(8).Padding(8, 10).Radius(8).Background(background).Children(func() {
 		ui.Icon(c, iconRefresh).Size(14, 14).TextColor(color)
 		ui.Column(c).Gap(2).Grow(1).Children(func() {
+			ui.Text(c, summary).FontSize(12).TextColor(p.muted).LineHeight(1.35)
 			for _, message := range messages {
 				ui.Text(c, message).FontSize(12).TextColor(color).LineHeight(1.35)
 			}
 		})
 	})
+}
+
+func aggregateLibraryTrackCount(home *music.Browse) int {
+	if home == nil {
+		return 0
+	}
+	count := 0
+	for _, section := range home.Sections {
+		count += len(section.Tracks)
+	}
+	return count
 }
 
 func (a *app) aggregateLibraryCachedLists(c *ui.Context, lib *library, src aggregateSource, view *aggregateView, p palette) {

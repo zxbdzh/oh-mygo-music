@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"mygo-music/internal/i18n"
 	"mygo-music/internal/music"
 	"mygo-music/internal/player"
 	"mygo-music/internal/plugin"
@@ -159,6 +161,112 @@ func TestAggregateFilteredTrackPlaysFullSectionQueue(t *testing.T) {
 			t.Fatalf("筛选后的行改变了来源队列顺序: got %+v, want %+v", queue, want)
 		}
 	}
+}
+
+// 聚合曲库的详情只展开一项，切换曲目后旧详情必须收起，避免长列表失去层次。
+func TestAggregateTrackDetailsKeepOneExpandedRow(t *testing.T) {
+	a, _, _, _ := aggregateFixture(t)
+	a.library.home = &music.Browse{Sections: []music.Section{{Title: "Saved", Tracks: []music.Track{
+		{ID: "detail-one", Name: "Detail One", AggregateSources: []music.AggregateSource{{Platform: "wy", AccountID: "account-a", TrackID: "detail-one", ListName: "Liked"}}},
+		{ID: "detail-two", Name: "Detail Two", AggregateSources: []music.AggregateSource{{Platform: "tx", AccountID: "account-b", TrackID: "detail-two", ListName: "Road songs"}}},
+	}}}}
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.aggregateLibrary(c, a.library, paletteFor(c.Theme()), false)
+	}, 760, 900)
+	tt.Frame()
+	if err := tt.Click("More Detail One"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tt.Access("Recording Source Detail One"); !ok {
+		t.Fatal("第一首曲目的详情没有展开")
+	}
+	if err := tt.Click("More Detail Two"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tt.Access("Recording Source Detail One"); ok {
+		t.Fatal("展开第二首曲目后第一首详情仍可见")
+	}
+	if _, ok := tt.Access("Recording Source Detail Two"); !ok {
+		t.Fatal("第二首曲目的详情没有展开")
+	}
+}
+
+// 聚合曲库滚动到底部后，最后一首仍需避开播放器并可直接播放。
+func TestAggregateLibraryScrollsPastPlayerBar(t *testing.T) {
+	a, _, _, _ := aggregateFixture(t)
+	tracks := make([]music.Track, 0, 24)
+	for index := range 24 {
+		tracks = append(tracks, music.Track{
+			ID:   fmt.Sprintf("scroll-%02d", index),
+			Name: fmt.Sprintf("Scroll Track %02d", index),
+			AggregateSources: []music.AggregateSource{{
+				Platform: "wy", AccountID: "account-a", TrackID: fmt.Sprintf("scroll-%02d", index), ListName: "Liked",
+			}},
+		})
+	}
+	a.library.home = &music.Browse{Sections: []music.Section{{Title: "Long list", Tracks: tracks}}}
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.aggregateLibrary(c, a.library, paletteFor(c.Theme()), false)
+	}, 760, 700)
+	tt.Frame()
+	tt.Scroll(600, 500, 0, 100000)
+	tt.Advance(time.Second)
+	tt.Frame()
+	if err := tt.Click("Scroll Track 23"); err != nil {
+		t.Fatalf("滚动到底部后最后一首不可操作：%v", err)
+	}
+	if current := a.pl.Current(); current == nil || current.ID != "scroll-23" {
+		t.Fatalf("最后一首没有进入播放队列：%+v", current)
+	}
+}
+
+// 聚合曲库的浅色、深色和窄窗口底部截图只使用合成来源，供人工检查层级与遮挡。
+func TestAggregateLibraryFrames(t *testing.T) {
+	dir := os.Getenv("MM_FRAMES")
+	if dir == "" {
+		t.Skip("设置 MM_FRAMES 保存聚合曲库截图")
+	}
+	lang := i18n.Language()
+	i18n.SetLanguage(i18n.Chinese)
+	defer i18n.SetLanguage(lang)
+	a, _, _, _ := aggregateFixture(t)
+	tracks := make([]music.Track, 0, 12)
+	for index := range 12 {
+		tracks = append(tracks, music.Track{
+			ID:   fmt.Sprintf("frame-%02d", index),
+			Name: fmt.Sprintf("Frame Track %02d", index),
+			AggregateSources: []music.AggregateSource{{
+				Platform: "wy", AccountID: "frame-account", TrackID: fmt.Sprintf("frame-%02d", index), ListName: "Liked",
+			}},
+		})
+	}
+	a.library.home = &music.Browse{Sections: []music.Section{{Title: "Synthetic library", Tracks: tracks}}}
+	for _, width := range []int{900, 640} {
+		for _, dark := range []bool{false, true} {
+			tt := ui.NewTester(func(c *ui.Context) {
+				a.pal = paletteFor(c.Theme())
+				a.aggregateLibrary(c, a.library, a.pal, false)
+			}, width, 760)
+			tt.SetDark(dark)
+			settled(tt)
+			saveFrame(t, dir, fmt.Sprintf("aggregate-library-%d-dark-%v.png", width, dark), tt.Image())
+			if width == 640 {
+				tt.Scroll(float32(width-80), 620, 0, 100000)
+				settled(tt)
+				saveFrame(t, dir, fmt.Sprintf("aggregate-library-640-lower-dark-%v.png", dark), tt.Image())
+			}
+		}
+	}
+	a.pageScroll = ui.ScrollState{}
+	details := ui.NewTester(func(c *ui.Context) {
+		a.pal = paletteFor(c.Theme())
+		a.aggregateLibrary(c, a.library, a.pal, false)
+	}, 900, 760)
+	settled(details)
+	if err := details.Click("更多 Frame Track 00"); err != nil {
+		t.Fatal(err)
+	}
+	saveFrame(t, dir, "aggregate-library-details.png", details.Image())
 }
 
 func aggregateTarget(t *testing.T, src *plugin.Plugin) string {

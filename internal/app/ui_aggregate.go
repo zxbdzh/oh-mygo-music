@@ -66,6 +66,7 @@ type aggregateView struct {
 	query                string
 	selected             []music.AggregateSource
 	sourceChoices        map[string]string
+	expandedTrack        string // 同组只展开一项，避免长曲库被详情面板撑开。
 	lists                []aggregateList
 	listsLoaded          bool
 	loadingLists         bool
