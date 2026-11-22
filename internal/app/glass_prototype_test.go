@@ -60,16 +60,16 @@ func TestDesktopAtmosphereFrames(t *testing.T) {
 	}{{"desktop", 1280, 840}, {"compact", 860, 620}} {
 		for _, dark := range []bool{false, true} {
 			a := newTestApp()
-			a.account = &music.Account{ID: "1", Name: "听众"}
+			a.account = &music.Account{ID: "1", Name: "Alex"}
 			tracks := framesTracks(a)
-			tracks[0].Name = "旅途的回声"
+			tracks[0].Name = "山海之间"
 			tracks[0].Artists = []music.Artist{{ID: "1", Name: "听见远方"}}
 			for _, url := range []string{"cover:0", "cover:1", "cover:2"} {
 				giveCover(a, url, cover)
 			}
-			a.mine = []music.Playlist{{ID: "10", Name: "旅途的回声", ImageURL: "cover:0", Mine: true}}
+			a.mine = []music.Playlist{{ID: "10", Name: "山海之间", ImageURL: "cover:0", Mine: true}}
 			a.playlists["10"] = &music.Playlist{
-				ID: "10", Name: "旅途的回声", Owner: "听众", Description: "让旋律陪你走过山海。", ImageURL: "cover:0", Tracks: tracks,
+				ID: "10", Name: "山海之间", Owner: "Alex", Description: "让旋律陪你走过山海。", ImageURL: "cover:0", Tracks: tracks,
 			}
 			a.home = &music.Browse{Sections: []music.Section{{Title: "Recently Played", Tracks: tracks}}}
 			a.route = route{page: pagePlaylist, src: "fake", id: "10"}
