@@ -50,6 +50,8 @@ type Player struct {
 	// Changed, if set, hears that what plays, where it is or whether it
 	// plays changed.
 	Changed func()
+	// SleepEnded 在“播完再暂停”到达曲尾并暂停时触发。
+	SleepEnded func()
 
 	queue       []music.Track
 	queueIDs    []uint64
@@ -101,7 +103,9 @@ type Player struct {
 
 	// remote is set while the current track is a PlaybackRemote source's,
 	// which plays it elsewhere: see remote.go.
-	remote *remote
+	remote          *remote
+	stopAfterTrack  bool
+	sleepRemoteFail func(error)
 	// after runs fn after d, on another goroutine; tests replace it.
 	after func(d time.Duration, fn func())
 	now   func() time.Time
@@ -187,6 +191,25 @@ func (p *Player) announce(t *music.Track, artwork []byte) {
 
 func (p *Player) ended() {
 	p.commitTransitions()
+	if p.stopAfterTrack {
+		p.stopAfterTrack = false
+		if p.monitorCancel != nil {
+			p.monitorCancel()
+			p.monitorCancel = nil
+		}
+		if p.playback != nil {
+			p.playback.completed = true
+		}
+		p.playing = false
+		if p.out != nil {
+			p.out.Pause()
+		}
+		p.sync()
+		if p.SleepEnded != nil {
+			p.SleepEnded()
+		}
+		return
+	}
 	if p.transitionNext != nil && p.transitionNext.blocked != nil {
 		preparation := p.transitionNext
 		failure := preparation.blocked
@@ -449,6 +472,62 @@ func (p *Player) Queue() []music.Track { return p.queue }
 
 // Playing reports what the listener wants: false while paused.
 func (p *Player) Playing() bool { return p.playing }
+
+// Remote reports whether the current track is played by a remote source.
+func (p *Player) Remote() bool {
+	if p.remote != nil {
+		return true
+	}
+	if p.track != nil {
+		if src := p.sourceOf(p.track); src != nil && src.Info().Playback == music.PlaybackRemote {
+			return true
+		}
+	}
+	return false
+}
+
+// StopAfterTrack reports whether playback will pause at the end of the current track.
+func (p *Player) StopAfterTrack() bool { return p.stopAfterTrack }
+
+// SetStopAfterTrack enables or disables pausing at the end of the current track.
+func (p *Player) SetStopAfterTrack(stop bool) {
+	if p.stopAfterTrack == stop {
+		return
+	}
+	p.stopAfterTrack = stop
+	if stop {
+		// 阻止已准备或即将开始的交叉淡化把下一首提前混入。
+		p.cancelTransitionPreparation()
+	} else {
+		p.prepareTransition()
+	}
+}
+
+// PauseForSleep pauses playback for the sleep timer, keeping local pause fade
+// settings and calling onRemoteFail if a remote pause command fails.
+func (p *Player) PauseForSleep(onRemoteFail func(error)) {
+	if !p.playing {
+		return
+	}
+	if p.remote != nil {
+		if p.remote.started {
+			p.remotePause(onRemoteFail)
+			return
+		}
+		p.sleepRemoteFail = onRemoteFail
+		p.playing = false
+		p.sync()
+		return
+	}
+	if p.out == nil && !p.loading {
+		// 电台续播等待期间没有激活输出，直接停播而不能重走开播分支。
+		p.playing = false
+		p.awaiting = false
+		p.sync()
+		return
+	}
+	p.TogglePlay()
+}
 
 // Loading reports whether the current track is still loading.
 // Loading reports whether the current track is on its way: loading, or
@@ -951,6 +1030,7 @@ func (p *Player) loadPlayback(at, skipped, dir int, play bool, from time.Duratio
 		p.command(was.src, was.src.RemotePause)
 	}
 	p.stop()
+	p.sleepRemoteFail = nil
 	p.gen++
 	gen := p.gen
 	p.playback = playback

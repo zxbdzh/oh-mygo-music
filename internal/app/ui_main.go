@@ -20,6 +20,7 @@ func (a *app) view(c *ui.Context) {
 	t.Selection = p.accent.Alpha(0.3)
 	c.SetTheme(&t)
 
+	a.checkSleepTimer()
 	a.shortcuts(c)
 	if a.nowPlaying {
 		a.queueOpen = false
@@ -37,7 +38,7 @@ func (a *app) view(c *ui.Context) {
 		c.Root().Background(ui.Transparent)
 	}
 	root := ui.Box(c).Fill()
-	if !c.Focused(a.searchBox) && (a.sharing == nil || !a.sharing.open) {
+	if !c.Focused(a.searchBox) && (a.sharing == nil || !a.sharing.open) && !a.sleep.open {
 		// Space plays and pauses wherever the focus is, as in Music. On
 		// the container around everything, it comes before a button the
 		// pointer focused, which would take Space as a click; on the

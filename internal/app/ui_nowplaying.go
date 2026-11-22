@@ -393,8 +393,9 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 				a.npRise(ui.Box(c).Margin(14, 0, 18, 0), 3).Children(func() {
 					a.transport(c, white, white.Alpha(0.45), accent, 28)
 				})
-				a.npRise(ui.Row(c).Justify(ui.Center), 4).Children(func() {
+				a.npRise(ui.Row(c).Justify(ui.Center).AlignItems(ui.Center).Gap(8), 4).Children(func() {
 					a.volumeSlider(c, white.Alpha(0.7), white.Alpha(0.18), 180)
+					a.sleepTimerButton(c, "np", white.Alpha(0.7), true, true)
 				})
 				ui.Box(c.Key("under-controls")).Grow(1).Basis(0)
 			})
@@ -582,9 +583,10 @@ func (a *app) stageBar(c *ui.Context, tr *music.Track, art *artwork, accent ui.C
 				})
 			})
 			a.npRise(ui.Row(c), 3).Children(func() { a.transport(c, white, white.Alpha(0.45), accent, 22) })
-			a.npRise(ui.Row(c).Grow(1).Basis(0).MinWidth(0).Justify(ui.End), 4).Children(func() {
+			a.npRise(ui.Row(c).Grow(1).Basis(0).MinWidth(0).Justify(ui.End).AlignItems(ui.Center).Gap(8), 4).Children(func() {
 				qualityBadge(c, pl.Stream())
 				ui.Text(c, clock(pl.Position())+" / "+clock(pl.Duration())).FontSize(11.5).FontFeatures("tnum").TextColor(white.Alpha(0.5))
+				a.sleepTimerButton(c, "stage", white.Alpha(0.65), true, false)
 				a.volumeButton(c, white.Alpha(0.65))
 			})
 		})

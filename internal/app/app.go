@@ -177,6 +177,8 @@ type app struct {
 	volume              float64
 	volumeOpen          bool // the volume popover of the player bar shows
 	mutedFrom           float64
+	sleep               sleepTimerState
+	now                 func() time.Time
 	globalShortcuts     *shortcutManager
 	shortcutEdit        shortcutEditor
 	shortcutLikePending *shortcutLikeRequest
@@ -426,10 +428,12 @@ func Run() error {
 		a.pl.Normalize = func() bool { return a.settings.Normalize }
 		a.pl.Transitions = func() player.TransitionSettings { return a.settings.playbackTransitions() }
 		a.pl.Cache = newSongCache(a.settings.CacheMB)
+		a.pl.SleepEnded = func() { a.clearSleepTimer() }
 		a.pl.Changed = func() {
 			if draft := a.sharing; draft != nil && draft.clipPreviewActive && a.pl.Playing() {
 				a.stopSharePreview(draft)
 			}
+			a.syncSleepTimerPlayback()
 			a.keepSession()
 			a.syncCaptions()
 			a.publishBetterLyrics()
@@ -471,14 +475,20 @@ func Run() error {
 		// From the menu bar alone, the Dock icon shows while the window
 		// does.
 		a.syncDock()
-		a.win.OnShow(a.syncDock)
+		a.win.OnShow(func() {
+			a.syncDock()
+			a.checkSleepTimer()
+		})
 		a.win.OnHide(a.syncDock)
 		// Hidden, it draws nothing for a while: what the heap took for
 		// the pages it showed goes back to the system, which Go would
 		// keep for minutes.
 		a.win.OnHide(func() { go debug.FreeOSMemory() })
 		// Shown or switched to a while after, it shows what's new.
-		a.win.OnFocus(a.freshenHome)
+		a.win.OnFocus(func() {
+			a.freshenHome()
+			a.checkSleepTimer()
+		})
 		a.applyTray()
 		// 无法创建托盘时显示主窗口，避免后台启动后失去打开入口。
 		if a.startupTray && a.tray == nil {
@@ -509,6 +519,7 @@ func Run() error {
 	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
 		a.quitting = true
+		a.cancelSleepTimer()
 		a.stopBackgroundTasks()
 		if a.sharing != nil {
 			a.stopSharePreview(a.sharing)

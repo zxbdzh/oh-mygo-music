@@ -96,7 +96,7 @@ func (p *Player) nextTransitionIndex() int {
 }
 
 func (p *Player) prepareTransition() {
-	if p.transition == nil || p.out == nil || p.transitionNext != nil || !p.playing {
+	if p.stopAfterTrack || p.transition == nil || p.out == nil || p.transitionNext != nil || !p.playing {
 		return
 	}
 	settings := p.transitionSettings()
