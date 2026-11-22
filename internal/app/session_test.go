@@ -64,6 +64,25 @@ func keptSession(t *testing.T, s player.Session) {
 	t.Cleanup(func() { os.Remove(path) })
 }
 
+// 移除最后一项后持久保存空队列，重启不能复活上一次保存的歌曲。
+func TestSessionKeepsQueueEmptyAfterLastRemoval(t *testing.T) {
+	keptSession(t, player.Session{})
+	a := newTestApp()
+	a.pl.Cue([]music.Track{song("1", "第一首")})
+	a.saveSession()
+	original := a.savedSession
+	a.pl.RemoveQueued(a.pl.QueueEntryID(0))
+	a.saveSession()
+	if a.savedSession == original {
+		t.Fatal("last removal left the original saved session")
+	}
+	restarted := newTestApp()
+	restarted.restoreSession()
+	if restarted.pl.Current() != nil || len(restarted.pl.Queue()) != 0 {
+		t.Fatal("removed track came back after restarting")
+	}
+}
+
 // Started again, the app picks up the station it played, paused where it was,
 // and the station's source goes on feeding it.
 func TestRestoreSessionReattachesRadio(t *testing.T) {

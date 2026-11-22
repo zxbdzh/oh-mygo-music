@@ -27,7 +27,11 @@ func sessionPath() (string, error) {
 func (a *app) saveSession() {
 	s, ok := a.pl.Session()
 	if !ok {
-		return
+		if a.savedSession == "" {
+			return
+		}
+		// 空队列也覆盖旧快照，避免最后一项被移除后在下次启动复活。
+		s = player.Session{At: -1}
 	}
 	b, err := json.Marshal(s)
 	if err != nil || string(b) == a.savedSession {

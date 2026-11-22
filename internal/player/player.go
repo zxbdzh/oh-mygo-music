@@ -51,12 +51,14 @@ type Player struct {
 	// plays changed.
 	Changed func()
 
-	queue   []music.Track
-	order   []int // the queue's indices in play order: shuffled or not
-	at      int   // where in order the current track is, -1 for none
-	shuffle bool
-	repeat  RepeatMode
-	volume  float64
+	queue       []music.Track
+	queueIDs    []uint64
+	nextQueueID uint64
+	order       []int // the queue's indices in play order: shuffled or not
+	at          int   // where in order the current track is, -1 for none
+	shuffle     bool
+	repeat      RepeatMode
+	volume      float64
 
 	// A radio goes on with the tracks its feed gives, as the queue nears
 	// its end, for as long as nothing else is played.
@@ -268,6 +270,7 @@ func (p *Player) playQueue(tracks []music.Track, start, dir int) {
 	p.endRadio()
 	start = min(start, len(tracks)-1)
 	p.queue = append([]music.Track(nil), tracks...)
+	p.resetQueueIDs()
 	p.order = make([]int, len(p.queue))
 	for i := range p.order {
 		p.order[i] = i
@@ -311,9 +314,11 @@ func (p *Player) EndRadio() {
 	p.endRadio()
 	if p.at >= 0 && p.at+1 < len(p.order) {
 		kept := make([]music.Track, p.at+1)
+		keptIDs := make([]uint64, p.at+1)
 		var failed map[int]bool
 		for i, k := range p.order[:p.at+1] {
 			kept[i] = p.queue[k]
+			keptIDs[i] = p.QueueEntryID(k)
 			if p.playback != nil && p.playback.failed[k] {
 				if failed == nil {
 					failed = make(map[int]bool)
@@ -326,6 +331,7 @@ func (p *Player) EndRadio() {
 			p.playback.failed = failed
 		}
 		p.queue, p.order = kept, make([]int, len(kept))
+		p.queueIDs = keptIDs
 		for i := range p.order {
 			p.order[i] = i
 		}
@@ -388,8 +394,11 @@ func (p *Player) appendTracks(tracks []music.Track) {
 	for _, t := range tracks {
 		if k := (key{t.Source, t.ID}); !in[k] {
 			in[k] = true
+			p.ensureQueueIDs()
 			p.order = append(p.order, len(p.queue))
 			p.queue = append(p.queue, t)
+			p.nextQueueID++
+			p.queueIDs = append(p.queueIDs, p.nextQueueID)
 		}
 	}
 }
@@ -1478,6 +1487,7 @@ func (p *Player) Restore(s Session) {
 		seen[i] = true
 	}
 	p.queue, p.order = s.Queue, s.Order
+	p.resetQueueIDs()
 	p.shuffle, p.repeat = s.Shuffle, s.Repeat%3
 	p.loadSkipping(s.At, 0, stay, false, time.Duration(s.Position)*time.Millisecond)
 }

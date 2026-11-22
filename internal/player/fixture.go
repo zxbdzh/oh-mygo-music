@@ -15,6 +15,7 @@ import (
 // Cue makes tracks the queue, in order, with the first current.
 func (p *Player) Cue(tracks []music.Track) {
 	p.queue = tracks
+	p.resetQueueIDs()
 	p.order = make([]int, len(tracks))
 	for i := range p.order {
 		p.order[i] = i
