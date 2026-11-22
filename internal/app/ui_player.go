@@ -4,7 +4,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
 	"mygo-music/internal/player"
@@ -325,7 +324,7 @@ func (a *app) volumeSlider(c *ui.Context, color, track ui.Color, width float32) 
 }
 
 // transport is the row of controls: shuffle, previous, play, next, repeat.
-func (a *app) transport(c *ui.Context, color, dim, on ui.Color, size float32) {
+func (a *app) transport(c *ui.Context, color, dim, on ui.Color, size float32, prominent bool) {
 	pl := a.pl
 	ui.Row(c).Gap(size * 0.5).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 		shuffle := dim
@@ -338,7 +337,15 @@ func (a *app) transport(c *ui.Context, color, dim, on ui.Color, size float32) {
 		if iconButton(c.Key("prev"), iconPrev, size*0.85, color, T("Previous")).Clicked() {
 			pl.Prev()
 		}
-		if playButton(c.Key("play"), pl.Playing(), size*1.25, color).Clicked() {
+		play := playButton(c.Key("play"), pl.Playing(), size*1.25, color)
+		if prominent {
+			fill := a.pal.accent
+			if play.Hovered() {
+				fill = c.Theme().AccentHover
+			}
+			play.Size(40, 40).Background(fill).TextColor(a.pal.onAccent)
+		}
+		if play.Clicked() {
 			pl.TogglePlay()
 		}
 		if iconButton(c.Key("next"), iconNext, size*0.85, color, T("Next")).Clicked() {
@@ -364,99 +371,96 @@ func (a *app) playerBar(c *ui.Context) {
 	pl := a.pl
 	tr := pl.Current()
 	a.tickTimes(c)
-	// Over the foot of the page: while content is under it, its edge frosts
-	// it, with a hairline along the top.
-	edge := ui.Box(c.Key("bottom-edge")).Absolute().Left(0).Right(0).Bottom(0).Height(playerBarHeight).
-		Material(glass.ScrollEdge{Hard: true, Bottom: true, Background: p.bg})
-	edge.Opacity(edgeShown(edge, a.underBottom))
-	// The controls keep the middle, between sides that share what is left:
-	// narrower, the middle gives up to 140 DIPs, and what plays keeps room
-	// for its cover, some of its title and its heart.
+	// 桌面底栏作为窗口的一部分，避免悬浮边缘透出被遮住的列表内容。
+	bar := ui.Box(c.Key("player-bar")).Absolute().Left(0).Right(0).Bottom(0).Height(playerBarHeight).Background(p.sidebar)
+	width, _ := c.Size()
 	const controls = 3*32 + 2*4 // lyrics, queue and the speaker
-	ui.Row(c).Absolute().Left(0).Right(0).Bottom(0).Height(playerBarHeight).PaddingX(20).Gap(20).AlignItems(ui.Center).Children(func() {
-		// What plays.
-		ui.Row(c).Grow(1).Basis(0).MinWidth(150).Children(func() {
-			if tr == nil {
-				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).Size(48, 48).Radius(8).Background(p.hover).Center().Children(func() {
-						ui.Icon(c, iconNote).Size(18, 18).TextColor(p.faint)
-					})
-					ui.Text(c, T("Not Playing")).FontSize(13).TextColor(p.muted)
-				})
-				return
-			}
-			info := ui.ButtonBase(c.Key("info")).Gap(12).AlignItems(ui.Center).FocusRing(false).Shrink(1).MinWidth(0).Label(T("Open Now Playing"))
-			hovered := info.Hovered()
-			info.Children(func() {
-				// Now Playing grows out of the cover, which is gone from the
-				// bar while it shows.
-				mini := ui.Box(c.Key("mini-cover")).Size(48, 48).Shrink(0)
-				if b := mini.LayoutBounds(); b.W > 0 {
-					a.npFrom = b
-				}
-				if a.npT > 0 && !a.npStill {
-					mini.Opacity(0)
-				}
-				mini.Children(func() {
-					a.cover(c, tr.Album.ImageURL, 120, 48, npFromRadius).Shadow(0, 2, 8, 0, p.cardShade)
-					if hovered {
-						ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(8).Center().
-							Background(ui.RGBA(0, 0, 0, 0.35)).TextColor(ui.RGB(255, 255, 255)).Children(func() {
-							ui.Icon(c, iconDown).Size(18, 18).Rotate(180)
+	bar.Children(func() {
+		ui.Row(c).Fill().Padding(8, 36, 5, 36).Gap(24).AlignItems(ui.Center).Children(func() {
+			// What plays.
+			ui.Row(c).Grow(1).Basis(0).MinWidth(150).Children(func() {
+				if tr == nil {
+					ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+						ui.Box(c).Size(playerBarCoverSize, playerBarCoverSize).Radius(npFromRadius).Background(p.hover).Center().Children(func() {
+							ui.Icon(c, iconNote).Size(18, 18).TextColor(p.faint)
 						})
+						ui.Text(c, T("Not Playing")).FontSize(13).TextColor(p.muted)
+					})
+					return
+				}
+				info := ui.ButtonBase(c.Key("info")).Gap(12).AlignItems(ui.Center).FocusRing(false).Shrink(1).MinWidth(0).Label(T("Open Now Playing"))
+				hovered := info.Hovered()
+				info.Children(func() {
+					// Now Playing grows out of the cover, which is gone from the
+					// bar while it shows.
+					mini := ui.Box(c.Key("mini-cover")).Size(playerBarCoverSize, playerBarCoverSize).Shrink(0)
+					if b := mini.LayoutBounds(); b.W > 0 {
+						a.npFrom = b
 					}
+					if a.npT > 0 && !a.npStill {
+						mini.Opacity(0)
+					}
+					mini.Children(func() {
+						a.cover(c, tr.Album.ImageURL, 120, playerBarCoverSize, npFromRadius)
+						if hovered {
+							ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(npFromRadius).Center().
+								Background(ui.RGBA(0, 0, 0, 0.35)).TextColor(ui.RGB(255, 255, 255)).Children(func() {
+								ui.Icon(c, iconDown).Size(18, 18).Rotate(180)
+							})
+						}
+					})
+					ui.Column(c).Shrink(1).MinWidth(0).Gap(3).Children(func() {
+						ui.Text(c, tr.Name).FontSize(13.5).FontWeight(600).SingleLine()
+						// What it is waiting on shows in place of the artists.
+						var sub string
+						color := p.muted
+						switch {
+						case pl.Loading():
+							sub = T("Buffering…")
+						case pl.Err() != "":
+							sub, color = pl.Err(), p.accent
+						}
+						if sub == "" {
+							a.artistLinks(c, tr, p.muted, p.text).FontSize(12).SingleLine()
+						} else {
+							ui.Text(c, sub).FontSize(12).TextColor(color).SingleLine()
+						}
+					})
 				})
-				ui.Column(c).Shrink(1).MinWidth(0).Gap(3).Children(func() {
-					ui.Text(c, tr.Name).FontSize(13.5).FontWeight(600).SingleLine()
-					// What it is waiting on shows in place of the artists.
-					var sub string
-					color := p.muted
-					switch {
-					case pl.Loading():
-						sub = T("Buffering…")
-					case pl.Err() != "":
-						sub, color = pl.Err(), p.accent
-					}
-					if sub == "" {
-						a.artistLinks(c, tr, p.muted, p.text).FontSize(12).SingleLine()
-					} else {
-						ui.Text(c, sub).FontSize(12).TextColor(color).SingleLine()
-					}
-				})
+				if info.Clicked() {
+					a.nowPlaying = true
+				}
+				a.likeButton(c.Key("like"), tr, 16, p.muted).Margin(0, 0, 0, 4).Shrink(0)
 			})
-			if info.Clicked() {
-				a.nowPlaying = true
-			}
-			a.likeButton(c.Key("like"), tr, 16, p.muted).Margin(0, 0, 0, 4).Shrink(0)
-		})
 
-		// Controls over the progress.
-		ui.Column(c).Width(440).Shrink(1).MinWidth(300).Gap(0).AlignItems(ui.Stretch).Children(func() {
-			a.transport(c, p.text, p.muted, p.accent, 18)
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Margin(-4, 0, 0, 0).Children(func() {
-				ui.Text(c, clock(pl.Position())).FontSize(10.5).FontFeatures("tnum").TextColor(p.faint).Width(34).TextAlign(ui.End)
-				a.scrubber(c.Key("bar-scrub"), &a.barScrub, p.press, p.text.Alpha(0.75), 14, p.accent).Grow(1)
-				ui.Text(c, clock(pl.Duration())).FontSize(10.5).FontFeatures("tnum").TextColor(p.faint).Width(34)
+			ui.Box(c).Width(280).Shrink(1).MinWidth(200).Center().Children(func() {
+				a.transport(c, p.text, p.muted, p.accent, 18, true)
+			})
+
+			// Lyrics and volume.
+			ui.Row(c).Grow(1).Basis(0).MinWidth(controls).Justify(ui.End).AlignItems(ui.Center).Gap(4).Children(func() {
+				if width >= 1000 && tr != nil {
+					ui.Text(c, clock(pl.Position())+" / "+clock(pl.Duration())).FontSize(10.5).FontFeatures("tnum").TextColor(p.muted).Margin(0, 12, 0, 0)
+				}
+				lyr := p.muted
+				if a.nowPlaying {
+					lyr = p.accent
+				}
+				label := T("Lyrics")
+				if tr != nil && tr.ShowID != "" {
+					label = T("About This Episode")
+				}
+				if iconButton(c.Key("lyrics"), iconLyrics, 16, lyr, label).Clicked() && tr != nil {
+					a.nowPlaying, a.npPane = true, a.lyricsPaneChosen()
+				}
+				if iconButton(c.Key("queue"), iconQueue, 16, p.muted, T("Queue")).Clicked() && tr != nil {
+					a.nowPlaying, a.npPane = true, paneQueue
+				}
+				a.volumeButton(c, p.text.Alpha(0.75))
 			})
 		})
-
-		// Lyrics and volume.
-		ui.Row(c).Grow(1).Basis(0).MinWidth(controls).Justify(ui.End).AlignItems(ui.Center).Gap(4).Children(func() {
-			lyr := p.muted
-			if a.nowPlaying {
-				lyr = p.accent
-			}
-			label := T("Lyrics")
-			if tr != nil && tr.ShowID != "" {
-				label = T("About This Episode")
-			}
-			if iconButton(c.Key("lyrics"), iconLyrics, 16, lyr, label).Clicked() && tr != nil {
-				a.nowPlaying, a.npPane = true, a.lyricsPaneChosen()
-			}
-			if iconButton(c.Key("queue"), iconQueue, 16, p.muted, T("Queue")).Clicked() && tr != nil {
-				a.nowPlaying, a.npPane = true, paneQueue
-			}
-			a.volumeButton(c, p.text.Alpha(0.75))
-		})
+		// 整个窗口宽度都能拖动；命中区跨过上沿，细进度线也容易点中。
+		a.scrubber(c.Key("bar-scrub"), &a.barScrub, p.hairline, p.accent, 14, ui.Transparent).
+			Absolute().Left(0).Right(0).Top(-7)
 	})
 }

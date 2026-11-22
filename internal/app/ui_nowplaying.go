@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
 	"mygo-music/internal/lyrics"
@@ -27,13 +28,13 @@ var npFade = ui.Animation{Duration: 200 * time.Millisecond, NonMotion: true}
 // Call it once a build, before the window's content.
 func (a *app) npState(c *ui.Context) (open, settled bool) {
 	open = a.nowPlaying && a.pl.Current() != nil
-	if open != a.npOpen {
+	if open != a.npOpen || open && (a.npTextColor(c) != white) != a.backdropCache.light {
 		a.npOpen = open
 		// The window buttons light over its dark backdrop, and as the
 		// theme over the pages (Windows).
 		if a.win != nil {
 			buttons := mygo.ThemeSystem
-			if open {
+			if open && a.npTextColor(c) == white {
 				buttons = mygo.ThemeDark
 			}
 			a.win.SetWindowButtonsTheme(buttons)
@@ -172,7 +173,8 @@ func (a *app) npFromRect(w, h float32) ui.Rect {
 	if a.npFrom.W > 0 {
 		return a.npFrom
 	}
-	return ui.Rect{X: sidebarWidth + 21, Y: h - (playerBarHeight+48)/2, W: 48, H: 48}
+	// 底栏上下留白相差 3，封面回收时要对齐实际中心。
+	return ui.Rect{X: 36, Y: h - (playerBarHeight+playerBarCoverSize)/2 + 1.5, W: playerBarCoverSize, H: playerBarCoverSize}
 }
 
 // npMorph moves e, a cover of Now Playing, out of the player bar's cover
@@ -224,7 +226,7 @@ func (a *app) npRadius(c *ui.Context, r, size float32) float32 {
 }
 
 // npFromRadius is the corner radius of the player bar's cover.
-const npFromRadius = 8
+const npFromRadius = playerBarCoverSize / 2
 
 // npRise fades e in and lifts it into place as Now Playing opens, once the
 // cover is on its way: the nth of the things that do, one after another,
@@ -260,11 +262,15 @@ func (a *app) nowPlayingView(c *ui.Context) {
 
 	// Near the bar, the card is only its cover, the rest gone clear.
 	bg := ui.Hex("#0b0b0d")
+	ink := a.npTextColor(c)
+	if ink != white {
+		bg = a.pal.bg
+	}
 	if t := a.npT; t < 1 && !a.npStill {
 		bg = bg.Alpha(smoothstep(0, 0.35, t))
 	}
 	root := ui.Box(c.Key("now-playing")).Absolute().Top(0).Left(0).Right(0).Bottom(0).
-		Background(bg).TextColor(white)
+		Background(bg).TextColor(ink)
 	// The pointer is over the view whenever it is in the window.
 	pointerIn := root.Hovered()
 	root.Children(func() {
@@ -285,6 +291,7 @@ func (a *app) nowPlayingView(c *ui.Context) {
 
 func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accent ui.Color, w, h float32, pointerIn bool) {
 	pl := a.pl
+	ink := a.npTextColor(c)
 	a.commentsFor(tr)
 	// An episode has what it is about and its captions in place of lyrics; a
 	// song, lyrics in place of those. Comments are for a source that has them.
@@ -315,7 +322,7 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 		// showing only while the pointer is in the window, as the pane tabs do.
 		a.npRise(ui.Row(c).Height(topBar(c)).Justify(ui.Center).AlignItems(ui.Center).DragWindow(), 0).Children(func() {
 			reveal(ui.Box(c.Key("close-reveal")), pointerIn).Children(func() {
-				if iconButton(c.Key("close"), iconDown, 22, white.Alpha(0.7), T("Close")).Clicked() {
+				if iconButton(c.Key("close"), iconDown, 22, ink.Alpha(0.7), T("Close")).Clicked() {
 					a.nowPlaying = false
 				}
 			})
@@ -335,6 +342,14 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 		if a.npPane == paneWall {
 			// The wall takes the whole view too, under the song playing.
 			a.wallPane(c, tr, art, accent, w, h, pointerIn)
+			return
+		}
+		if a.npPane == paneLyrics {
+			a.npRise(reveal(npTabsRow(c, w), pointerIn), 0).Children(func() {
+				a.paneTabs(c)
+				a.lyricDisplayButton(c, tr)
+			})
+			a.immersiveLyrics(c, tr, art, accent, w, h)
 			return
 		}
 
@@ -383,7 +398,7 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 				a.npRise(ui.Row(c).Height(16).AlignItems(ui.Center), 2).Children(func() {
 					ui.Text(c, clock(pl.Position())).FontSize(11).FontFeatures("tnum").TextColor(white.Alpha(0.5))
 					ui.Spacer(c)
-					qualityBadge(c, pl.Stream())
+					a.qualityBadge(c, pl.Stream())
 					ui.Spacer(c)
 					status := "-" + clock(pl.Duration()-pl.Position())
 					if pl.Loading() {
@@ -392,7 +407,7 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 					ui.Text(c, status).FontSize(11).FontFeatures("tnum").TextColor(white.Alpha(0.5))
 				})
 				a.npRise(ui.Box(c).Margin(14, 0, 18, 0), 3).Children(func() {
-					a.transport(c, white, white.Alpha(0.45), accent, 28)
+					a.transport(c, white, white.Alpha(0.45), accent, 28, false)
 				})
 				a.npRise(ui.Row(c).Justify(ui.Center), 4).Children(func() {
 					a.volumeSlider(c, white.Alpha(0.7), white.Alpha(0.18), 180)
@@ -412,8 +427,6 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 				// off the lines before the one sung.
 				ui.Box(c).Height(npCoverTop)
 				switch a.npPane {
-				case paneLyrics:
-					a.lyricsPane(c, tr, h)
 				case paneComments:
 					a.commentsPane(c, tr)
 				case paneShow:
@@ -426,6 +439,38 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 			})
 		})
 	}
+}
+
+func (a *app) npTextColor(c *ui.Context) ui.Color {
+	if a.npPane == paneLyrics && !c.Theme().Dark && !a.settings.Fog {
+		return a.pal.text
+	}
+	return white
+}
+
+func (a *app) immersiveLyrics(c *ui.Context, tr *music.Track, art *artwork, accent ui.Color, w, h float32) {
+	ink := a.npTextColor(c)
+	coverSize := max(128, min(w*0.33, h-326, 420))
+	pad := npSideX(w)
+	// 把进度与播放操作留在底部，大封面和歌词可以共享完整的内容高度。
+	ui.Row(c).Grow(1).MinHeight(0).Padding(20, pad, 24, pad).Gap(min(w*0.055, 80)).AlignItems(ui.Stretch).Children(func() {
+		ui.Column(c).Width(coverSize).Justify(ui.Center).Gap(22).Children(func() {
+			a.npMorph(c, ui.Box(c.Key("cover-morph")).Size(coverSize, coverSize)).Children(func() {
+				a.npCover(c, tr, art, coverSize)
+			})
+			a.npRise(ui.Column(c).Gap(7), 1).Children(func() {
+				if station := a.pl.Radio(); station != "" {
+					a.radioChip(c, station)
+				}
+				ui.Text(c, tr.Name).FontSize(26).FontWeight(750).LetterSpacing(-0.4).MaxLines(2).LineHeight(1.2)
+				a.artistLinks(c, tr, ink.Alpha(0.6), ink, true).FontSize(14).SingleLine()
+			})
+		})
+		a.npRise(ui.Column(c.Key("pane")).Grow(1).Basis(0).MinWidth(0).Padding(30, 0, 0, 0), 2).Children(func() {
+			a.lyricsPane(c, tr, h)
+		})
+	})
+	a.stageBar(c, tr, art, accent)
 }
 
 // npMaxWidth is how wide the cover and the pane beside it go, at most.
@@ -531,12 +576,13 @@ func (a *app) choosePane(i int) {
 // radioChip says which radio plays, over the title: a click on it, or on
 // its cross, leaves the radio, playing on the song.
 func (a *app) radioChip(c *ui.Context, name string) {
+	ink := a.npTextColor(c)
 	exit := Tf("Leave %s", radioLabel(name))
 	chip := ui.ButtonBase(c.Key("radio-chip")).Gap(5).Padding(3, 6, 3, 8).Margin(0, 0, 4, -8).Radius(999).
 		AlignItems(ui.Center).AlignSelf(ui.Start).FocusRing(false).Label(exit).Tooltip(exit)
-	bg, fg, cross := ui.Transparent, white.Alpha(0.6), float32(0.5)
+	bg, fg, cross := ui.Transparent, ink.Alpha(0.6), float32(0.5)
 	if chip.Hovered() {
-		bg, fg, cross = white.Alpha(0.12), white.Alpha(0.85), 1
+		bg, fg, cross = ink.Alpha(0.12), ink.Alpha(0.85), 1
 	}
 	chip.Background(chip.AnimateColor("bg", bg, ui.Animation{Duration: 120 * time.Millisecond})).TextColor(fg)
 	chip.Children(func() {
@@ -550,53 +596,69 @@ func (a *app) radioChip(c *ui.Context, name string) {
 }
 
 // qualityBadge marks a lossless stream, as it plays.
-func qualityBadge(c *ui.Context, st *music.Stream) {
+func (a *app) qualityBadge(c *ui.Context, st *music.Stream) {
 	if st == nil || st.Quality != "lossless" && st.Type != "flac" && st.Type != "wav" {
 		return
 	}
-	ui.Text(c, T("Lossless")).FontSize(9.5).FontWeight(800).LetterSpacing(0.6).TextColor(ui.Hex("#f5d58a")).
-		Padding(1, 6).Radius(4).Border(1, ui.Hex("#f5d58a").Alpha(0.55))
+	color := ui.Hex("#f5d58a")
+	if a.npTextColor(c) != white {
+		color = ui.Hex("#87622b")
+	}
+	ui.Text(c, T("Lossless")).FontSize(9.5).FontWeight(800).LetterSpacing(0.6).TextColor(color).
+		Padding(1, 6).Radius(4).Border(1, color.Alpha(0.55))
 }
 
 // stageBar is the slim bar along the foot of the stage: what plays, where
 // it is, and the controls.
 func (a *app) stageBar(c *ui.Context, tr *music.Track, art *artwork, accent ui.Color) {
 	pl := a.pl
-	ui.Column(c).Padding(0, 48, 28, 48).Gap(10).Children(func() {
-		a.npRise(a.scrubber(c.Key("stage-scrub"), &a.npScrub, white.Alpha(0.18), white.Alpha(0.9), 14, accent.Mix(white, 0.35)), 2)
-		ui.Row(c).Gap(14).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Grow(1).Basis(0).MinWidth(0).Gap(12).AlignItems(ui.Center).Children(func() {
-				if bmp := bitmap(art); bmp != nil {
-					cov := a.npMorph(c, ui.Box(c.Key(tr.ID)).Size(44, 44))
-					in := artIn(cov, bmp)
-					cov.Children(func() { artImage(c, bmp, a.npRadius(c, 8, 44), in) })
-				}
-				// All but the cover, which flies to the bar's, fade as the
-				// rest of Now Playing does.
-				a.npRise(ui.Row(c).Shrink(1).MinWidth(0).Gap(12).AlignItems(ui.Center), 3).Children(func() {
-					ui.Column(c).Shrink(1).MinWidth(0).Gap(2).Children(func() {
-						ui.Text(c, tr.Name).FontSize(14).FontWeight(700).SingleLine()
-						a.artistLinks(c, tr, white.Alpha(0.55), white).FontSize(12).SingleLine()
+	ink := a.npTextColor(c)
+	fill := ink.Alpha(0.9)
+	if ink != white {
+		fill = a.pal.accent
+	}
+	ui.Column(c).Padding(0, 32, 24, 32).Gap(10).Children(func() {
+		// 控制区只保留一层玻璃，避免盖住封面氛围又保持文字可读。
+		ui.Column(c.Key("stage-controls")).Padding(12, 16).Gap(10).Radius(24).
+			Material(glass.Glass{Style: glass.Clear, Clarity: 0.2}).Children(func() {
+			a.npRise(a.scrubber(c.Key("stage-scrub"), &a.npScrub, ink.Alpha(0.15), fill, 14, accent.Mix(white, 0.35)), 2)
+			ui.Row(c).Gap(14).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Grow(1).Basis(0).MinWidth(0).Gap(12).AlignItems(ui.Center).Children(func() {
+					if bmp := bitmap(art); bmp != nil {
+						cov := a.npMorph(c, ui.Box(c.Key(tr.ID)).Size(44, 44))
+						in := artIn(cov, bmp)
+						cov.Children(func() { artImage(c, bmp, a.npRadius(c, 8, 44), in) })
+					}
+					// All but the cover, which flies to the bar's, fade as the
+					// rest of Now Playing does.
+					a.npRise(ui.Row(c).Shrink(1).MinWidth(0).Gap(12).AlignItems(ui.Center), 3).Children(func() {
+						ui.Column(c).Shrink(1).MinWidth(0).Gap(2).Children(func() {
+							ui.Text(c, tr.Name).FontSize(14).FontWeight(700).SingleLine()
+							a.artistLinks(c, tr, ink.Alpha(0.55), ink).FontSize(12).SingleLine()
+						})
+						a.likeButton(c.Key("like"), tr, 17, ink.Alpha(0.6))
+						a.songMenu(c.Key("more"), tr, 17, ink.Alpha(0.6)).Margin(0, 0, 0, -10)
 					})
-					a.likeButton(c.Key("like"), tr, 17, white.Alpha(0.6))
-					a.songMenu(c.Key("more"), tr, 17, white.Alpha(0.6)).Margin(0, 0, 0, -10)
 				})
-			})
-			a.npRise(ui.Row(c), 3).Children(func() { a.transport(c, white, white.Alpha(0.45), white, 22) })
-			a.npRise(ui.Row(c).Grow(1).Basis(0).MinWidth(0).Justify(ui.End), 4).Children(func() {
-				ui.Text(c, clock(pl.Position())+" / "+clock(pl.Duration())).FontSize(11.5).FontFeatures("tnum").TextColor(white.Alpha(0.5))
+				a.npRise(ui.Row(c), 3).Children(func() { a.transport(c, ink, ink.Alpha(0.45), fill, 22, false) })
+				a.npRise(ui.Row(c).Grow(1).Basis(0).MinWidth(0).Justify(ui.End), 4).Children(func() {
+					a.qualityBadge(c, pl.Stream())
+					ui.Text(c, clock(pl.Position())+" / "+clock(pl.Duration())).FontSize(11.5).FontFeatures("tnum").TextColor(ink.Alpha(0.5))
+					a.volumeButton(c, ink.Alpha(0.65))
+				})
 			})
 		})
 	})
 }
 
 func (a *app) paneTab(c *ui.Context, i int, label string) {
+	ink := a.npTextColor(c)
 	b := ui.ButtonBase(c.Key(i)).Padding(6, 14).Radius(999).FocusRing(false).Label(label)
-	bg, fg := ui.Transparent, white.Alpha(0.55)
+	bg, fg := ui.Transparent, ink.Alpha(0.55)
 	if a.npPane == i {
-		bg, fg = white.Alpha(0.14), white
+		bg, fg = ink.Alpha(0.1), ink
 	} else if b.Hovered() {
-		bg = white.Alpha(0.06)
+		bg = ink.Alpha(0.06)
 	}
 	b.Background(b.AnimateColor("bg", bg, ui.Animation{Duration: 120 * time.Millisecond}))
 	b.Children(func() {
@@ -619,6 +681,7 @@ func (a *app) paneTab(c *ui.Context, i int, label string) {
 
 func (a *app) lyricsPane(c *ui.Context, tr *music.Track, h float32) {
 	pl := a.pl
+	ink := a.npTextColor(c)
 	lines, loaded := pl.Lyrics()
 	lines = a.displayedLyrics(tr, lines)
 	if len(lines) == 0 {
@@ -633,7 +696,7 @@ func (a *app) lyricsPane(c *ui.Context, tr *music.Track, h float32) {
 				lyricsSkeleton(c, npShimmer(c))
 				return
 			}
-			ui.Text(c, T("No lyrics. Enjoy the music.")).FontSize(24).FontWeight(700).TextColor(white.Alpha(0.4))
+			ui.Text(c, T("No lyrics. Enjoy the music.")).FontSize(24).FontWeight(700).TextColor(ink.Alpha(0.4))
 		})
 		a.quietCard(c, dim, h*0.18)
 		return
@@ -676,6 +739,7 @@ type linesStyle struct {
 // lit has still to go (lyricGlide). foot, if set, follows the lines.
 func (a *app) timedLines(c *ui.Context, scroll ui.Element, lines []lyrics.Line, pos time.Duration, cur int, lag float32, st linesStyle, foot func()) {
 	pl := a.pl
+	ink := a.npTextColor(c)
 	var active ui.Element
 	// Japanese lyrics are drawn in a Japanese font, kanji and kana alike;
 	// their translations in the app's language.
@@ -696,7 +760,7 @@ func (a *app) timedLines(c *ui.Context, scroll ui.Element, lines []lyrics.Line, 
 					alpha *= quietFaded
 				}
 				if line.Hovered() {
-					line.Background(white.Alpha(0.06))
+					line.Background(ink.Alpha(0.06))
 				}
 				scale := float32(0.94)
 				if on {
@@ -714,7 +778,7 @@ func (a *app) timedLines(c *ui.Context, scroll ui.Element, lines []lyrics.Line, 
 							ui.RichText(c.Key("words")).Lang(lang).FontSize(st.size).FontWeight(st.weight).LineHeight(st.lineHeight).LetterSpacing(-0.4).Children(func() {
 								for wi, wd := range l.Words {
 									lit := clamp01(float32((pos - wd.Start).Seconds() / max(0.05, (wd.End-wd.Start).Seconds())))
-									ui.Text(c.Key(wi), wd.Text).TextColor(white.Alpha(0.38 + 0.62*lit))
+									ui.Text(c.Key(wi), wd.Text).TextColor(ink.Alpha(0.38 + 0.62*lit))
 								}
 							})
 							if pl.Playing() {
@@ -722,10 +786,10 @@ func (a *app) timedLines(c *ui.Context, scroll ui.Element, lines []lyrics.Line, 
 								c.After(40 * time.Millisecond)
 							}
 						} else {
-							ui.Text(c, l.Text).Lang(lang).FontSize(st.size).FontWeight(st.weight).LineHeight(st.lineHeight).LetterSpacing(-0.4).TextColor(white)
+							ui.Text(c, l.Text).Lang(lang).FontSize(st.size).FontWeight(st.weight).LineHeight(st.lineHeight).LetterSpacing(-0.4).TextColor(ink)
 						}
 						if l.Translation != "" {
-							ui.Text(c, l.Translation).FontSize(17).FontWeight(600).TextColor(white.Alpha(0.7))
+							ui.Text(c, l.Translation).FontSize(17).FontWeight(600).TextColor(ink.Alpha(0.7))
 						}
 					})
 				})

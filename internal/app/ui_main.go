@@ -4,7 +4,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
 	"mygo-music/internal/music"
@@ -33,7 +32,12 @@ func (a *app) view(c *ui.Context) {
 	if c.Vibrancy() {
 		c.Root().Background(ui.Transparent)
 	}
-	root := ui.Box(c).Fill()
+	ambient := a.ambientArtwork()
+	root := ui.Box(c).Fill().Background(p.bg)
+	if ambient != nil {
+		// 浏览页只保留轻微封面氛围，导航和底栏保持中性，避免整页蒙色。
+		root.Draw(func(painter *ui.Painter, r ui.Rect) { drawAmbient(painter, r, ambient) })
+	}
 	if !c.Focused(a.searchBox) && (a.sharing == nil || !a.sharing.open) {
 		// Space plays and pauses wherever the focus is, as in Music. On
 		// the container around everything, it comes before a button the
@@ -55,21 +59,21 @@ func (a *app) view(c *ui.Context) {
 				// trackList), so it shows again as it was.
 				return
 			}
-			side := ui.Column(c).Width(sidebarWidth)
-			if !c.Vibrancy() {
-				side.Background(p.sidebar)
-			}
+			side := ui.Column(c).Width(sidebarWidth).Background(p.sidebar)
 			side.Children(func() { a.sidebar(c) })
 			// Keyed, so that a popover of the sidebar opening or closing
 			// keeps what the page and its bars hold, their edges' fades.
-			ui.Box(c.Key("main")).Grow(1).Background(p.bg).Children(func() {
+			main := ui.Box(c.Key("main")).Grow(1)
+			main.Children(func() {
 				a.content(c)
 				// The bars float over the page, which scrolls under them:
 				// positioned, they paint over it.
 				a.pageTop(c)
-				a.playerBar(c)
 			})
 		})
+		if !npOpen || !npSettled {
+			a.playerBar(c)
+		}
 		a.nowPlayingLayer(c, npOpen, npSettled)
 	})
 	a.backgroundTasksLayer(c)
@@ -225,11 +229,12 @@ func (a *app) sidebar(c *ui.Context) {
 	}
 	// Where nothing in it takes the press, the sidebar moves the window, as
 	// the title bar it reaches up into would.
-	ui.Column(c).Fill().Padding(top, 14, 14, 14).Gap(4).DragWindow().Children(func() {
+	ui.Column(c).Fill().Padding(top, 14, playerBarHeight+8, 14).Gap(4).DragWindow().Children(func() {
+		ui.Row(c).Height(38).Gap(9).PaddingX(8).AlignItems(ui.Center).Margin(0, 0, 18, 0).Children(func() {
+			ui.Icon(c, iconNote).Size(22, 22).TextColor(a.pal.accent)
+			ui.Text(c, "Oh MyGo").FontSize(18).FontWeight(750).TextColor(a.pal.text)
+		})
 		a.sourceSwitcher(c)
-		if a.can("search") {
-			a.searchField(c)
-		}
 
 		ui.Scroll(c.Key("nav")).TrackScroll(&a.navScroll).Grow(1).Margin(0, -6).Padding(0, 6).Gap(4).Children(func() {
 			for _, n := range a.sidebarItems() {
@@ -255,7 +260,7 @@ func (a *app) navItem(c *ui.Context, icon *ui.SVG, label string, r route) {
 	bg := ui.Transparent
 	switch {
 	case selected:
-		bg = p.press
+		bg = p.accent.Alpha(0.12)
 	case b.Hovered():
 		bg = p.hover
 	}
@@ -266,7 +271,7 @@ func (a *app) navItem(c *ui.Context, icon *ui.SVG, label string, r route) {
 	}
 	b.Children(func() {
 		ui.Icon(c, icon).Size(17, 17).TextColor(color)
-		ui.Text(c, label).FontSize(13.5).FontWeight(500).TextColor(p.text)
+		ui.Text(c, label).FontSize(13.5).FontWeight(500).TextColor(color)
 	})
 	if b.Clicked() {
 		a.open(r)
@@ -284,7 +289,9 @@ func (a *app) clearSearch() {
 }
 
 // playerBarHeight is the height of the player along the foot of the pages.
-const playerBarHeight = 84
+const playerBarHeight = 74
+
+const playerBarCoverSize = 56
 
 // pageGap is the room between the bar over a page and its content.
 const pageGap = 12
@@ -321,7 +328,7 @@ func topBar(c *ui.Context) float32 {
 }
 
 // topBarHeight is the least height of the strip along the top.
-const topBarHeight = 40
+const topBarHeight = 56
 
 // startMark marks where a page's content starts, first in what scrolls:
 // once it has moved up, content is under the bar at the top.
@@ -355,29 +362,33 @@ func edgeShown(el ui.Element, under bool) float32 {
 	return el.AnimateTo("shown", target, ui.Animation{Duration: 180 * time.Millisecond})
 }
 
-// pageTop is the strip over the top of a page, frosting what scrolls under
-// it as macOS 26's hard scroll edge does: it drags the window, and holds
-// the back button once there is a page to go back to.
+// pageTop keeps navigation on a steady surface while the page scrolls below.
 func (a *app) pageTop(c *ui.Context) {
 	top, _ := a.insets(c)
-	edge := ui.Box(c.Key("top-edge")).Absolute().Top(0).Left(0).Right(0).Height(top).DragWindow().
-		Material(glass.ScrollEdge{Hard: true, Background: a.pal.bg})
-	// The pointer over it brings the edge up too, as AppKit's does.
-	edge.Opacity(edgeShown(edge, a.underTop || edge.Hovered()))
-	if len(a.history) > 0 || len(a.forward) > 0 {
-		ui.Row(c).Absolute().Top(0).Left(20).Height(topBar(c)).AlignItems(ui.Center).Children(func() {
-			back := iconButton(c.Key("back"), iconBack, 18, a.pal.muted, T("Back")).Disabled(len(a.history) == 0)
-			if len(a.history) == 0 {
-				back.Opacity(0.35)
-			}
-			if back.Clicked() {
-				a.back()
-			}
-			if len(a.forward) > 0 && iconButton(c.Key("forward"), iconForward, 18, a.pal.muted, T("Forward")).Clicked() {
-				a.goForward()
-			}
+	line := a.pal.hairline
+	ui.Box(c.Key("top-edge")).Absolute().Top(0).Left(0).Right(0).Height(top).DragWindow().Background(a.pal.bg).
+		Draw(func(p *ui.Painter, r ui.Rect) {
+			p.Fill(ui.Rect{X: r.X, Y: r.Y + r.H - 1, W: r.W, H: 1}, line, 0)
 		})
-	}
+	ui.Row(c).Absolute().Top(0).Left(24).Right(max(24, c.TitleBar().Right)).Height(topBar(c)).Gap(6).AlignItems(ui.Center).Children(func() {
+		back := iconButton(c.Key("back"), iconBack, 18, a.pal.muted, T("Back")).Disabled(len(a.history) == 0)
+		if len(a.history) == 0 {
+			back.Opacity(0.35)
+		}
+		if back.Clicked() {
+			a.back()
+		}
+		forward := iconButton(c.Key("forward"), iconForward, 18, a.pal.muted, T("Forward")).Disabled(len(a.forward) == 0)
+		if len(a.forward) == 0 {
+			forward.Opacity(0.35)
+		}
+		if forward.Clicked() {
+			a.goForward()
+		}
+		if a.can("search") {
+			ui.Box(c).Width(360).Shrink(1).MinWidth(96).Margin(0, 0, 0, 16).Children(func() { a.searchField(c) })
+		}
+	})
 }
 
 func (a *app) content(c *ui.Context) {
