@@ -337,7 +337,6 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 			a.wallPane(c, tr, art, accent, w, h, pointerIn)
 			return
 		}
-
 		side := float32(math.Min(float64(w)*0.36, 440))
 		// The cover leaves room above it for the tabs, starting as far
 		// under them as the wall's song does.
@@ -835,44 +834,9 @@ func (g *lyricGlide) step(c *ui.Context, s *ui.ScrollState) float32 {
 // queuePane lists the whole queue in play order, the track playing marked
 // among the others: a click plays one there, and the list stays as it is.
 func (a *app) queuePane(c *ui.Context) {
-	pl := a.pl
-	order, at := pl.PlayOrder()
-	// Opened, it shows the track playing at its top; after, it follows it
-	// as little as keeps it in view.
-	if at >= 0 && at != a.queueAt {
-		if a.queueAt < 0 {
-			a.queueList.ScrollTo(at, ui.Start)
-		} else {
-			a.queueList.ScrollIntoView(at)
-		}
-		a.queueAt = at
+	if a.queueAt < 0 {
+		a.queuePaneView.current = 0
 	}
-	a.queueList.Key = func(row int) any { return order[row] }
-	ui.List(c.Key("queue"), &a.queueList, len(order), func(r int) {
-		i := order[r]
-		tr := &pl.Queue()[i]
-		playing := r == at
-		row := ui.ButtonBase(c.Key(i)).Height(58).PaddingX(10).Gap(14).Radius(12).AlignItems(ui.Center).FocusRing(false).Label(tr.Name).
-			ContextMenu(a.songItems(tr, ""))
-		switch {
-		case playing:
-			row.Background(white.Alpha(0.12))
-		case row.Hovered():
-			row.Background(white.Alpha(0.08))
-		}
-		if tr.Unavailable {
-			row.Opacity(0.4)
-		}
-		row.Children(func() {
-			a.cover(c, tr.Album.ImageURL, 96, 42, 7)
-			ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-				ui.Text(c, tr.Name).FontSize(14).FontWeight(600).SingleLine()
-				a.artistLinks(c, tr, white.Alpha(0.55), white).FontSize(12.5).SingleLine()
-			})
-			ui.Text(c, clock(tr.Length())).FontSize(12).FontFeatures("tnum").TextColor(white.Alpha(0.4))
-		})
-		if row.Clicked() && !tr.Unavailable && !playing {
-			pl.Jump(i)
-		}
-	}).Grow(1).Padding(8, 0, 40, 0).Gap(2)
+	a.queueRows(c, &a.queuePaneView, white)
+	a.queueAt = 0
 }

@@ -167,3 +167,23 @@ func TestHomeFeatureCardPlayingFrameBudget(t *testing.T) {
 		t.Fatal("the feature card stopped requesting frames while its record plays")
 	}
 }
+
+// 暂停队列侧栏和空队列静止后不持续请求装饰帧。
+func TestQueueDrawerIdleFrameBudget(t *testing.T) {
+	a := newTestApp()
+	a.pl.Cue([]music.Track{song("1", "一")})
+	tester := ui.NewTester(a.view, 1180, 780)
+	settled(tester)
+	if err := tester.Click("Queue"); err != nil {
+		t.Fatal(err)
+	}
+	settled(tester)
+	if tester.FramePending() {
+		t.Fatal("paused queue drawer continuously requests frames")
+	}
+	a.pl.RemoveQueued(a.pl.QueueEntryID(0))
+	settled(tester)
+	if tester.FramePending() {
+		t.Fatal("empty queue drawer continuously requests frames")
+	}
+}

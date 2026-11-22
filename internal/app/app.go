@@ -136,26 +136,29 @@ type app struct {
 
 	suggestions suggestState // what the search field's query may be after
 
-	nowPlaying   bool
-	npOpen       bool    // Now Playing as it last showed: open or not
-	npT          float32 // how far open Now Playing last showed, 0 to 1
-	npShift      float32 // how far down it last showed, pulled
-	npPull       float32 // how far the pointer has pulled it down
-	npHeld       bool    // whether the pointer presses on it, to pull it
-	npStill      bool    // whether it comes and goes in place, sliding or fading, rather than out of the bar's cover
-	npFrom       ui.Rect // the player bar's cover, which it grows out of
-	npPane       int     // paneLyrics, paneQueue, paneStage, paneComments or paneShow
-	lyricScroll  ui.ScrollState
-	lyricGlide   lyricGlide
-	lyricAt      int
-	lyricTrack   string
-	lyricDisplay lyricDisplayCache
-	stageDisplay stageLyricCache
-	sharing      *shareDraft
-	queueList    ui.ListState
-	queueAt      int // the row of the queue pane last scrolled to, -1 while it is hidden
-	comments     commentState
-	tabCount     rollState // the count on the comments' tab, as it rolls
+	nowPlaying    bool
+	npOpen        bool    // Now Playing as it last showed: open or not
+	npT           float32 // how far open Now Playing last showed, 0 to 1
+	npShift       float32 // how far down it last showed, pulled
+	npPull        float32 // how far the pointer has pulled it down
+	npHeld        bool    // whether the pointer presses on it, to pull it
+	npStill       bool    // whether it comes and goes in place, sliding or fading, rather than out of the bar's cover
+	npFrom        ui.Rect // the player bar's cover, which it grows out of
+	npPane        int     // paneLyrics, paneQueue, paneStage, paneComments or paneShow
+	lyricScroll   ui.ScrollState
+	lyricGlide    lyricGlide
+	lyricAt       int
+	lyricTrack    string
+	lyricDisplay  lyricDisplayCache
+	stageDisplay  stageLyricCache
+	sharing       *shareDraft
+	queueOpen     bool
+	queueButton   ui.Handle
+	queueDrawer   queueViewState
+	queuePaneView queueViewState
+	queueAt       int // the row of the queue pane last scrolled to, -1 while it is hidden
+	comments      commentState
+	tabCount      rollState // the count on the comments' tab, as it rolls
 
 	backgroundTasks     []*backgroundTask
 	nextBackgroundTask  uint64

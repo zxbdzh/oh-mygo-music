@@ -21,6 +21,9 @@ func (a *app) view(c *ui.Context) {
 	c.SetTheme(&t)
 
 	a.shortcuts(c)
+	if a.nowPlaying {
+		a.queueOpen = false
+	}
 
 	// Back to the front, after the listener may have changed their
 	// playlists elsewhere.

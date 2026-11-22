@@ -453,9 +453,7 @@ func (a *app) playerBar(c *ui.Context) {
 			if iconButton(c.Key("lyrics"), iconLyrics, 16, lyr, label).Clicked() && tr != nil {
 				a.nowPlaying, a.npPane = true, a.lyricsPaneChosen()
 			}
-			if iconButton(c.Key("queue"), iconQueue, 16, p.muted, T("Queue")).Clicked() && tr != nil {
-				a.nowPlaying, a.npPane = true, paneQueue
-			}
+			a.queueDrawerButton(c)
 			a.volumeButton(c, p.text.Alpha(0.75))
 		})
 	})

@@ -741,4 +741,8 @@ var zhCN = map[string]string{
 	"Online link ready; image unavailable. Open to edit.":                  "链接已就绪，图片暂不可用，点击打开修改",
 	"Share is no longer available. Retry to prepare it again.":             "分享已失效，请重试重新准备",
 	"Could not verify share. Retry or open to edit.":                       "分享校验失败，可重试或打开修改",
+	"Close Queue":                                                          "关闭队列",
+	"Locate Current Track":                                                 "定位当前播放",
+	"The queue is empty":                                                   "待播队列为空",
+	"Remove from Queue: %s":                                                "从队列移除：%s",
 }
