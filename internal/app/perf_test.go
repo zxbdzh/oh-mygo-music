@@ -137,3 +137,78 @@ func TestRetroPlayerPausedFrameBudget(t *testing.T) {
 		}
 	}
 }
+
+// 已结束的任务和隐藏的运行任务不持续请求画面，避免后台任务空转。
+func TestBackgroundTaskIdleFrameBudget(t *testing.T) {
+	for _, state := range []backgroundTaskState{backgroundTaskRunning, backgroundTaskSucceeded, backgroundTaskFailed, backgroundTaskCanceled} {
+		a := newTestApp()
+		task := a.newBackgroundTask("Share", "Track")
+		task.state = state
+		task.hidden = state == backgroundTaskRunning
+		tester := ui.NewTester(a.view, 1200, 800)
+		settled(tester)
+		tester.Advance(time.Second)
+		if tester.FramePending() {
+			t.Fatalf("idle task state %d keeps requesting frames", state)
+		}
+	}
+}
+
+// 歌单与首页共用封面背景时，静止画面不持续请求装饰帧。
+func TestAmbientBackdropFrameBudget(t *testing.T) {
+	a := newTestApp()
+	tracks := framesTracks(a)
+	a.playlists["10"] = &music.Playlist{ID: "10", ImageURL: "cover:0", Tracks: tracks}
+	a.route = route{page: pagePlaylist, src: "fake", id: "10"}
+	// 播放中的首页唱片会持续请求帧，暂停后才能检查背景的空闲帧预算。
+	a.pl.Cue(tracks[:1])
+	a.home = &music.Browse{Sections: []music.Section{{Title: "For You", Tracks: a.pl.Queue()}}}
+	if a.pl.Playing() || a.ambientArtwork() == nil {
+		t.Fatal("fixture must have a paused track with a loaded ambient cover")
+	}
+	tester := ui.NewTester(a.view, 1180, 780)
+	for _, page := range []pageKind{pagePlaylist, pageHome} {
+		a.route.page = page
+		settled(tester)
+		if tester.FramePending() {
+			t.Fatalf("page %v asks for frames while its background is idle", page)
+		}
+	}
+}
+
+// 封面背景没有即时帧或延时重绘时，空闲期间不会反复绘制。
+func TestAmbientBackdropDoesNotScheduleFrames(t *testing.T) {
+	a := newTestApp()
+	tracks := framesTracks(a)
+	a.pl.Cue(tracks[:1])
+	art := a.ambientArtwork()
+	if art == nil {
+		t.Fatal("fixture must have a loaded ambient cover")
+	}
+	paints := 0
+	tester := ui.NewTester(func(c *ui.Context) {
+		ui.Box(c).Fill().Draw(func(p *ui.Painter, r ui.Rect) {
+			paints++
+			drawAmbient(p, r, art)
+		})
+	}, 1180, 780)
+	initialPaints := paints
+	tester.Advance(2 * time.Second)
+	if tester.FramePending() || paints != initialPaints {
+		t.Fatalf("idle ambient backdrop was repainted %d times", paints-initialPaints)
+	}
+}
+
+// 首页特色卡播放时继续请求唱片动画帧。
+func TestHomeFeatureCardPlayingFrameBudget(t *testing.T) {
+	a := newTestApp()
+	tracks := framesTracks(a)
+	a.pl.Cue(tracks[:1])
+	a.pl.Hold(10 * time.Second)
+	a.home = &music.Browse{Sections: []music.Section{{Title: "For You", Tracks: a.pl.Queue()}}}
+	tester := ui.NewTester(a.view, 1180, 780)
+	tester.Advance(time.Second)
+	if !tester.FramePending() || a.dailySpin.speed <= 0 {
+		t.Fatal("the feature card stopped requesting frames while its record plays")
+	}
+}
