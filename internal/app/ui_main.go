@@ -226,6 +226,7 @@ func (a *app) sidebar(c *ui.Context) {
 	// Where nothing in it takes the press, the sidebar moves the window, as
 	// the title bar it reaches up into would.
 	ui.Column(c).Fill().Padding(top, 14, 14, 14).Gap(4).DragWindow().Children(func() {
+		a.sidebarBrand(c)
 		a.sourceSwitcher(c)
 		if a.can("search") {
 			a.searchField(c)
