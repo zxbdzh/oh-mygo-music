@@ -54,14 +54,14 @@ func (a *app) dismissSuggestions() {
 	*s = suggestState{}
 }
 
-// searchField is the search field in the toolbar, which suggests what
+// searchField is the search field atop the sidebar, which suggests what
 // its query may be after as it is typed, and, empty, lists the searches
 // before.
 func (a *app) searchField(c *ui.Context) {
 	p := a.pal
 	// The input fills the field, under its icon, so a click anywhere on the
 	// field focuses it.
-	field := ui.Row(c).Height(34).Radius(12).AlignItems(ui.Stretch)
+	field := ui.Row(c).Height(32).Radius(9).AlignItems(ui.Stretch).Margin(0, 0, 14, 0)
 	if c.Focused(a.searchBox) {
 		field.Background(p.bg).Shadow(0, 0, 0, 3, p.accent.Alpha(0.25)).Border(1, p.accent.Alpha(0.6))
 	} else {
@@ -115,7 +115,7 @@ func (a *app) searchField(c *ui.Context) {
 		pop := popoverColors(p.dark)
 		cb.Popup(func(panel ui.Element) {
 			panel.AttachTo(field, ui.AnchorBottomStart, ui.AnchorTopStart).
-				Margin(6, 0, 0, 0).Padding(5).Gap(1).MaxWidth(480).
+				Margin(6, 0, 0, 0).Padding(5).Gap(1).MaxWidth(sidebarWidth+60).
 				Radius(12).Background(pop.fill).Border(0.5, pop.edge).
 				Shadow(0, 8, 24, -4, ui.RGBA(0, 0, 0, 0.2))
 			if w := field.Bounds().W; w > 0 {

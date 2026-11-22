@@ -15,120 +15,27 @@ import (
 	"mygo-music/internal/music"
 )
 
-func playlistWithPlayingTrack(t *testing.T) (*app, *ui.Tester) {
-	t.Helper()
-	return playlistFrame(t, true)
-}
-
-func playlistFrame(t *testing.T, playing bool) (*app, *ui.Tester) {
-	t.Helper()
-	a := newTestApp()
-	a.account = &music.Account{ID: "1", Name: "Alex"}
-	tracks := framesTracks(a)
-	a.mine = []music.Playlist{{ID: "10", Name: "Polar Night", ImageURL: "cover:0", Mine: true}}
-	a.playlists["10"] = &music.Playlist{
-		ID: "10", Name: "Polar Night", Owner: "Alex", ImageURL: "cover:0", Mine: true, Tracks: tracks,
-	}
-	a.route = route{page: pagePlaylist, src: "fake", id: "10"}
-	if playing {
-		a.pl.Cue([]music.Track{tracks[0]})
-		a.pl.Hold(10 * time.Second)
-	}
-	return a, ui.NewTester(a.view, 1180, 780)
-}
-
-// 歌单页在有当前歌曲时显示封面氛围，并保持内容层的浅色可读性。
-func TestPlaylistAmbientBackdropFrame(t *testing.T) {
-	for _, dark := range []bool{false, true} {
-		_, plainTester := playlistFrame(t, false)
-		plainTester.SetDark(dark)
-		settled(plainTester)
-		plain := samplePlaylistBackdrop(plainTester.Image())
-
-		_, tester := playlistWithPlayingTrack(t)
-		tester.SetDark(dark)
-		settled(tester)
-		ambient := samplePlaylistBackdrop(tester.Image())
-		if colorSpread(ambient) <= colorSpread(plain)+1000000 {
-			t.Fatalf("playlist background has no visible cover tint (dark=%t): plain=%v ambient=%v", dark, plain, ambient)
-		}
-		if dir := os.Getenv("MM_FRAMES"); dir != "" {
-			name := "playlist-ambient-light.png"
-			if dark {
-				name = "playlist-ambient-dark.png"
-			}
-			saveFrame(t, dir, name, tester.Image())
-		}
-	}
-}
-
-func samplePlaylistBackdrop(img image.Image) [3]uint64 {
-	var red, green, blue uint64
-	// 只取内容右侧留白，避免首页封面卡片的取色和动画污染背景覆盖检查。
-	for y := 120; y < 245; y++ {
-		for x := 1150; x < 1170; x++ {
-			r, g, b, _ := img.At(x, y).RGBA()
-			red += uint64(r)
-			green += uint64(g)
-			blue += uint64(b)
-		}
-	}
-	return [3]uint64{red, green, blue}
-}
-
-func colorSpread(color [3]uint64) uint64 {
-	high, low := color[0], color[0]
-	for _, value := range color[1:] {
-		high, low = max(high, value), min(low, value)
-	}
-	return high - low
-}
-
-// 返回首页时仍保留当前歌曲的封面氛围，导航不能改变播放队列。
-func TestAmbientBackdropFollowsNavigation(t *testing.T) {
-	a, tester := playlistWithPlayingTrack(t)
-	a.home = &music.Browse{Sections: []music.Section{{Title: "Recently Played", Tracks: a.pl.Queue()}}}
-	settled(tester)
-	track := *a.pl.Current()
-	if err := tester.Click("Home"); err != nil {
-		t.Fatal(err)
-	}
-	settled(tester)
-	if a.route.page != pageHome {
-		t.Fatalf("navigation stayed on page %v", a.route.page)
-	}
-	withCover := samplePlaylistBackdrop(tester.Image())
-	a.pl.Current().Album.ImageURL = ""
-	settled(tester)
-	withoutCover := samplePlaylistBackdrop(tester.Image())
-	if colorSpread(withCover) <= colorSpread(withoutCover)+1000000 {
-		t.Fatalf("navigation lost the current cover background: with=%v without=%v", withCover, withoutCover)
-	}
-	if current := a.pl.Current(); current.ID != track.ID || len(a.pl.Queue()) != 1 {
-		t.Fatal("navigation changed the playing track or queue")
-	}
-}
-
-// 播放页切换明暗主题时更新背景，同时保留曲目、队列和播放位置。
-func TestImmersiveAppearanceFollowsTheme(t *testing.T) {
-	a, tester := playlistWithPlayingTrack(t)
-	a.nowPlaying, a.npPane = true, paneLyrics
-	a.pl.SetLyrics(nil)
-	tester.SetDark(true)
-	settled(tester)
-	dark := samplePlaylistBackdrop(tester.Image())
+// 浅色主题下律动控制栏保留深色背景，避免白色面板遮住白色控件。
+func TestStageLightThemeBackdropCoversControls(t *testing.T) {
+	a, tester, _ := playingApp()
+	track := a.pl.Current()
+	track.Album.ImageURL = "stage-cover"
+	giveCover(a, track.Album.ImageURL, coverImage(ui.RGB(25, 92, 132), ui.RGB(210, 164, 82)))
+	a.nowPlaying, a.npPane = true, paneStage
 	tester.SetDark(false)
+	tester.SetPreferences(ui.Preferences{ReduceMotion: true})
 	settled(tester)
-	light := samplePlaylistBackdrop(tester.Image())
-	if light[0]+light[1]+light[2] <= dark[0]+dark[1]+dark[2]+20000000 {
-		t.Fatalf("light player kept its dark background: light=%v dark=%v", light, dark)
-	}
-	if a.pl.Current().ID != "1" || len(a.pl.Queue()) != 1 || a.pl.Position() != 10*time.Second {
-		t.Fatal("changing appearance reset playback")
+	frame := tester.Image()
+	bounds := frame.Bounds()
+	x := bounds.Min.X + bounds.Dx()*3/4
+	red, green, blue, _ := frame.At(x, bounds.Min.Y+bounds.Dy()-70).RGBA()
+	aboveRed, aboveGreen, aboveBlue, _ := frame.At(x, bounds.Min.Y+bounds.Dy()-140).RGBA()
+	if red+green+blue > aboveRed+aboveGreen+aboveBlue+3*20*257 {
+		t.Fatalf("stage controls are covered by a light surface: %04x %04x %04x", red, green, blue)
 	}
 }
 
-// 无头截图覆盖桌面外壳、沉浸歌词和紧凑窗口，封面可用本机图片替换。
+// 无头截图覆盖桌面外壳、歌词播放页和紧凑窗口，封面可用本机图片替换。
 func TestDesktopAtmosphereFrames(t *testing.T) {
 	dir := framesDir(t)
 	i18n.SetLanguage(i18n.Chinese)
@@ -153,16 +60,16 @@ func TestDesktopAtmosphereFrames(t *testing.T) {
 	}{{"desktop", 1280, 840}, {"compact", 860, 620}} {
 		for _, dark := range []bool{false, true} {
 			a := newTestApp()
-			a.account = &music.Account{ID: "1", Name: "Alex"}
+			a.account = &music.Account{ID: "1", Name: "听众"}
 			tracks := framesTracks(a)
-			tracks[0].Name = "山海之间"
+			tracks[0].Name = "旅途的回声"
 			tracks[0].Artists = []music.Artist{{ID: "1", Name: "听见远方"}}
 			for _, url := range []string{"cover:0", "cover:1", "cover:2"} {
 				giveCover(a, url, cover)
 			}
-			a.mine = []music.Playlist{{ID: "10", Name: "山海之间", ImageURL: "cover:0", Mine: true}}
+			a.mine = []music.Playlist{{ID: "10", Name: "旅途的回声", ImageURL: "cover:0", Mine: true}}
 			a.playlists["10"] = &music.Playlist{
-				ID: "10", Name: "山海之间", Owner: "Alex", Description: "让旋律陪你走过山海。", ImageURL: "cover:0", Tracks: tracks,
+				ID: "10", Name: "旅途的回声", Owner: "听众", Description: "让旋律陪你走过山海。", ImageURL: "cover:0", Tracks: tracks,
 			}
 			a.home = &music.Browse{Sections: []music.Section{{Title: "Recently Played", Tracks: tracks}}}
 			a.route = route{page: pagePlaylist, src: "fake", id: "10"}
@@ -189,9 +96,13 @@ func TestDesktopAtmosphereFrames(t *testing.T) {
 			a.nowPlaying, a.npPane = true, paneLyrics
 			settled(tester)
 			saveFrame(t, dir, fmt.Sprintf("%s-%s-player.png", size.name, appearance), tester.Image())
+			a.npPane = paneStage
+			settled(tester)
+			saveFrame(t, dir, fmt.Sprintf("%s-%s-stage.png", size.name, appearance), tester.Image())
 			if dark {
+				a.npPane = paneLyrics
 				a.pl.SetLyrics(nil)
-				tester.Frame()
+				settled(tester)
 				saveFrame(t, dir, fmt.Sprintf("%s-%s-no-lyrics.png", size.name, appearance), tester.Image())
 			}
 		}

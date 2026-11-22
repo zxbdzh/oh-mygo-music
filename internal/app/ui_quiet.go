@@ -143,7 +143,6 @@ func (a *app) hotCard(c *ui.Context, dim, size float32, place func(ui.Element)) 
 	if dim <= 0.01 || cm == nil {
 		return
 	}
-	ink := a.npTextColor(c)
 	card := ui.ButtonBase(c.Key("quiet")).Column().AlignItems(ui.Start).
 		Padding(16, 12).Gap(14).Radius(14).FocusRing(false).Label(T("View Comments"))
 	place(card)
@@ -156,19 +155,19 @@ func (a *app) hotCard(c *ui.Context, dim, size float32, place func(ui.Element)) 
 	in := card.AnimateTo("in", 1, ui.Animation{Spring: ui.SpringOptions{Duration: 700 * time.Millisecond, Bounce: 0.1}})
 	card.Opacity(min(dim, max(0, in))).Translate(0, (1-in)*16)
 	if card.Hovered() {
-		card.Background(ink.Alpha(0.06))
+		card.Background(white.Alpha(0.06))
 	}
 	card.Children(func() {
-		ui.Row(c).Gap(6).AlignItems(ui.Center).TextColor(ink.Alpha(0.5)).Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).TextColor(white.Alpha(0.5)).Children(func() {
 			ui.Icon(c, iconComment).Size(14, 14)
 			ui.Text(c, T("Top Comment")).FontSize(12.5).FontWeight(700).LetterSpacing(0.6)
 		})
-		ui.Text(c, cm.Text).FontSize(size).FontWeight(600).LineHeight(1.5).TextColor(ink.Alpha(0.92)).MaxLines(6)
+		ui.Text(c, cm.Text).FontSize(size).FontWeight(600).LineHeight(1.5).TextColor(white.Alpha(0.92)).MaxLines(6)
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			a.avatar(c, cm.AvatarURL, 22, ink.Alpha(0.1))
-			ui.Text(c, cm.Author).FontSize(13).TextColor(ink.Alpha(0.6)).SingleLine().Shrink(1).MinWidth(0)
+			a.avatar(c, cm.AvatarURL, 22, white.Alpha(0.1))
+			ui.Text(c, cm.Author).FontSize(13).TextColor(white.Alpha(0.6)).SingleLine().Shrink(1).MinWidth(0)
 			if cm.Likes > 0 {
-				ui.Row(c).Gap(4).AlignItems(ui.Center).Margin(0, 0, 0, 6).TextColor(ink.Alpha(0.45)).Children(func() {
+				ui.Row(c).Gap(4).AlignItems(ui.Center).Margin(0, 0, 0, 6).TextColor(white.Alpha(0.45)).Children(func() {
 					ui.Icon(c, iconThumb).Size(13, 13)
 					ui.Text(c, count(cm.Likes)).FontSize(12).FontFeatures("tnum")
 				})

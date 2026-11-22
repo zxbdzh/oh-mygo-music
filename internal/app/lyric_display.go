@@ -88,9 +88,8 @@ func (a *app) lyricScriptItems(menu *ui.Menu, track *music.Track) {
 }
 
 func (a *app) lyricDisplayButton(c *ui.Context, track *music.Track) {
-	ink := a.npTextColor(c)
-	button := ui.ButtonBase(c.Key("lyrics-display")).Padding(6, 10).Radius(999).Label(T("Lyrics Display")).Background(ink.Alpha(0.09))
-	button.Children(func() { ui.Text(c, T("Lyrics Display")).FontSize(12).TextColor(ink.Alpha(0.8)) })
+	button := ui.ButtonBase(c.Key("lyrics-display")).Padding(6, 10).Radius(999).Label(T("Lyrics Display")).Background(white.Alpha(0.09))
+	button.Children(func() { ui.Text(c, T("Lyrics Display")).FontSize(12).TextColor(white.Alpha(0.8)) })
 	button.Menu(func(menu *ui.Menu) {
 		lines, _ := a.pl.Lyrics()
 		available := hasTranslation(lines)
