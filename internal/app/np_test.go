@@ -17,8 +17,6 @@ func TestNowPlayingClosesAsOneLayer(t *testing.T) {
 	a := newTestApp()
 	a.pl.Cue([]music.Track{song("1", "宝船", "DOUDOU")})
 	a.pl.SetLyrics(nil)
-	// 深色队列与浅色浏览页形成对比，采样只检查关闭层是否仍覆盖两侧。
-	a.npPane = paneQueue
 	tt := ui.NewTester(a.view, 1200, 800)
 	tt.SetDark(false)
 	a.nowPlaying = true

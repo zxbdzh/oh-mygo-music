@@ -177,16 +177,17 @@ func TestSearchHistoryChoice(t *testing.T) {
 	}
 }
 
-// 搜索移到顶栏后，图标、内边距和边缘仍能聚焦，命中位置按实际边界计算。
+// A click anywhere on the sidebar's search field focuses it: only the text
+// in the middle took the click, not the icon, the padding or the edges.
 func TestSearchFieldClickFocuses(t *testing.T) {
 	for _, at := range []struct {
-		name              string
-		fractionX, dx, dy float32
+		name   string
+		dx, dy float32 // from the field's center
 	}{
-		{"icon", 0, 12, 0},
-		{"end", 1, -4, 0},
-		{"top", 0.5, 0, -13},
-		{"bottom", 0.5, 0, 13},
+		{"icon", -(sidebarWidth-28)/2 + 12, 0},
+		{"end", (sidebarWidth-28)/2 - 4, 0},
+		{"top", 0, -13},
+		{"bottom", 0, 13},
 	} {
 		a := newTestApp()
 		tt := ui.NewTester(a.view, 1200, 800)
@@ -195,7 +196,7 @@ func TestSearchFieldClickFocuses(t *testing.T) {
 		if !ok {
 			t.Fatal("no search field")
 		}
-		tt.ClickAt(r.X+r.W*at.fractionX+at.dx, r.Y+r.H/2+at.dy)
+		tt.ClickAt(sidebarWidth/2+at.dx, r.Y+r.H/2+at.dy)
 		tt.Frame()
 		tt.Type("迷星叫")
 		tt.Frame()
@@ -295,8 +296,7 @@ func TestSearchPopupFrames(t *testing.T) {
 			tt.Frame()
 			img := tt.Image()
 			s := float32(img.Bounds().Dx()) / 1000
-			// 搜索移到顶栏后，截图需覆盖输入框及下方弹层，而非旧侧栏。
-			crop := image.Rect(int(sidebarWidth*s), 0, img.Bounds().Dx(), int(300*s))
+			crop := image.Rect(0, 0, int((sidebarWidth+60)*s), int(360*s))
 			out := image.NewRGBA(image.Rect(0, 0, crop.Dx(), crop.Dy()))
 			draw.Draw(out, out.Bounds(), img, crop.Min, draw.Src)
 			name := fmt.Sprintf("search-dark%v-typed%v.png", dark, typed)

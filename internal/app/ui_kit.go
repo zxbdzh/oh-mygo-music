@@ -41,29 +41,29 @@ func paletteFor(t *ui.Theme) palette {
 	if t.Dark {
 		return palette{
 			dark:      true,
-			bg:        ui.Hex("#151512"),
-			sidebar:   ui.Hex("#1d1d19"),
-			text:      ui.Hex("#f2efe7"),
+			bg:        ui.Hex("#141416"),
+			sidebar:   ui.Hex("#1c1c1f"),
+			text:      ui.Hex("#f5f5f7"),
 			muted:     ui.RGBA(235, 235, 245, 0.56),
 			faint:     ui.RGBA(235, 235, 245, 0.3),
 			hairline:  ui.RGBA(255, 255, 255, 0.07),
 			hover:     ui.RGBA(255, 255, 255, 0.06),
 			press:     ui.RGBA(255, 255, 255, 0.1),
-			accent:    ui.Hex("#ed725e"),
+			accent:    ui.Oklch(0.66, 0.2, 22),
 			onAccent:  ui.Hex("#ffffff"),
 			cardShade: ui.RGBA(0, 0, 0, 0.45),
 		}
 	}
 	return palette{
-		bg:        ui.Hex("#f9fafb"),
-		sidebar:   ui.Hex("#ffffff"),
-		text:      ui.Hex("#18181b"),
+		bg:        ui.Hex("#ffffff"),
+		sidebar:   ui.Hex("#f4f4f6"),
+		text:      ui.Hex("#1d1d1f"),
 		muted:     ui.RGBA(60, 60, 67, 0.62),
 		faint:     ui.RGBA(60, 60, 67, 0.32),
 		hairline:  ui.RGBA(0, 0, 0, 0.07),
 		hover:     ui.RGBA(0, 0, 0, 0.04),
 		press:     ui.RGBA(0, 0, 0, 0.08),
-		accent:    ui.Hex("#e55b45"),
+		accent:    ui.Oklch(0.6, 0.21, 24),
 		onAccent:  ui.Hex("#ffffff"),
 		cardShade: ui.RGBA(0, 0, 0, 0.16),
 	}

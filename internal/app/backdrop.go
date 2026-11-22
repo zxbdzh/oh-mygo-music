@@ -115,7 +115,6 @@ type backdropCache struct {
 	art    *artwork
 	tint   ui.Color
 	fog    bool
-	light  bool
 	at     time.Time // when it was painted
 	drift  float64   // the clouds' time, in seconds, which stops on pause
 	speed  float64   // how fast drift goes: 1 playing, 0 paused
@@ -127,7 +126,6 @@ type backdropCache struct {
 func (a *app) backdrop(c *ui.Context, art *artwork, tint ui.Color) {
 	pl := a.pl
 	fog, still := a.settings.Fog, c.Preferences().ReduceMotion
-	light := a.npTextColor(c) != white
 	ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().Draw(func(p *ui.Painter, r ui.Rect) {
 		// The CPU, drawing the fog for want of a GPU, paints far fewer
 		// pixels, and those once a song: the fog stays still.
@@ -152,18 +150,18 @@ func (a *app) backdrop(c *ui.Context, art *artwork, tint ui.Color) {
 		lv, live := pl.Levels()
 		moved := bd.step(now, pl.Playing() && moving, lv, live && moving)
 		due := now.Sub(bd.at) >= backdropFrame-2*time.Millisecond
-		if bd.canvas == nil || bd.art != art || bd.tint != tint || bd.fog != fog || bd.light != light || moved && due {
+		if bd.canvas == nil || bd.art != art || bd.tint != tint || bd.fog != fog || moved && due {
 			if bd.canvas == nil {
 				bd.canvas = ui.NewCanvas(cw, ch)
 			}
-			bd.art, bd.tint, bd.fog, bd.light, bd.at = art, tint, fog, light, now
+			bd.art, bd.tint, bd.fog, bd.at = art, tint, fog, now
 			bass := bd.level.group(0, 6)
 			bd.canvas.Draw(p, func(cp *ui.Painter) {
 				box := ui.Rect{W: float32(cw), H: float32(ch)}
 				if fog {
 					drawFog(cp, box, tint, float32(bd.drift), bass)
 				} else {
-					drawBackdrop(cp, box, art, tint, light)
+					drawBackdrop(cp, box, art, tint)
 				}
 			})
 		}
@@ -182,19 +180,6 @@ func (a *app) backdrop(c *ui.Context, art *artwork, tint ui.Color) {
 			p.After(backdropFrame)
 		}
 	})
-}
-
-// ambientArtwork shares the playing cover across browsing pages.
-func (a *app) ambientArtwork() *artwork {
-	tr := a.pl.Current()
-	if tr == nil || tr.Album.ImageURL == "" {
-		return nil
-	}
-	art := a.art.get(sized(tr.Album.ImageURL, 600), true)
-	if art == nil || art.failed {
-		return nil
-	}
-	return art
 }
 
 // step moves the drift and the pulse on to now, and reports whether
@@ -219,43 +204,15 @@ func (bd *backdropCache) step(now time.Time, playing bool, lv [player.Bands]floa
 	return bd.speed > 0 || bd.level.group(0, 6) > 0.004
 }
 
-// drawAmbient keeps the page readable while borrowing the cover's hue.
-func drawAmbient(p *ui.Painter, r ui.Rect, art *artwork) {
-	base := ui.Hex("#f9fafb")
-	topMix, footMix, imageAlpha := float32(0.04), float32(0.01), float32(0.04)
-	if p.Theme().Dark {
-		base = ui.Hex("#151512")
-		topMix, footMix, imageAlpha = 0.07, 0.025, 0.055
-	}
-	top := base.MixOklab(art.tint, topMix)
-	foot := base.MixOklab(art.tint, footMix)
-	p.FillGradient(r, ui.LinearGradient{Angle: 145, Oklab: true, Stops: []ui.GradientStop{
-		{Color: top, At: 0}, {Color: foot, At: 1},
-	}}, 0)
-	if art.backdrop != nil {
-		p.ImageRegion(art.backdrop, ui.Rect{W: 48, H: 48}, coverRect(r, 48, 48),
-			ui.ImageOptions{Tint: white.Alpha(imageAlpha)})
-	}
-}
-
 // drawBackdrop paints the still backdrop in r.
-func drawBackdrop(p *ui.Painter, r ui.Rect, art *artwork, tint ui.Color, light bool) {
-	if light {
-		base := ui.Hex("#f0f4f6")
-		p.FillGradient(r, ui.LinearGradient{Angle: 130, Oklab: true,
-			From: white.MixOklab(tint, 0.08), To: base.MixOklab(tint, 0.18)}, 0)
-		if art != nil && art.backdrop != nil {
-			p.ImageRegion(art.backdrop, ui.Rect{W: 48, H: 48}, coverRect(r, 48, 48), ui.ImageOptions{Tint: white.Alpha(0.32)})
-		}
-		return
-	}
+func drawBackdrop(p *ui.Painter, r ui.Rect, art *artwork, tint ui.Color) {
 	top, foot := backdropColors(tint)
 	p.FillGradient(r, ui.LinearGradient{Angle: 180, Oklab: true, Stops: []ui.GradientStop{
 		{Color: top, At: 0}, {Color: foot, At: 1},
 	}}, 0)
 	if art != nil && art.backdrop != nil {
 		// The cover, blurred, as a faint wash of its own colors.
-		p.ImageRegion(art.backdrop, ui.Rect{W: 48, H: 48}, coverRect(r, 48, 48), ui.ImageOptions{Tint: white.Alpha(0.24)})
+		p.ImageRegion(art.backdrop, ui.Rect{W: 48, H: 48}, coverRect(r, 48, 48), ui.ImageOptions{Tint: white.Alpha(0.1)})
 	}
 	// Darker toward the foot, under the controls.
 	p.FillGradient(r, ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
