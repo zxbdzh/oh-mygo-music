@@ -455,6 +455,23 @@ func (a *app) trackRows(c *ui.Context, tracks []music.Track, covers bool, header
 			ui.Column(c).Children(func() {
 				a.startMark(c)
 				header(c)
+				w, _ := c.Size()
+				if len(tracks) > 0 && w-sidebarWidth > 820 && a.route.page != pageAlbum {
+					ui.Column(c).Gap(6).PaddingX(12).Margin(0, 0, 6, 0).Children(func() {
+						// 表头复用歌曲行的列宽与间距，使专辑作为元数据自然对齐。
+						ui.Row(c).Height(28).Gap(14).AlignItems(ui.Center).TextColor(a.pal.muted).FontSize(12).Children(func() {
+							ui.Text(c, "#").Width(26).TextAlign(ui.Center)
+							if covers {
+								ui.Box(c).Width(38)
+							}
+							ui.Text(c, T("Songs")).Grow(3).Basis(0).MinWidth(0)
+							ui.Text(c, T("Album")).Grow(2).Basis(0).MinWidth(0)
+							ui.Box(c).Width(32)
+							ui.Text(c, T("Duration")).Width(44).TextAlign(ui.End)
+						})
+						ui.Box(c).Height(0.5).Background(a.pal.hairline)
+					})
+				}
 			})
 			return
 		}
@@ -488,7 +505,8 @@ func (a *app) trackRowPlay(c *ui.Context, tracks []music.Track, i int, covers bo
 	// An album's page has no column of the album its songs are on.
 	wide := w-sidebarWidth > 820 && a.route.page != pageAlbum
 	playing := sameTrack(a.pl.Current(), tr)
-	row := ui.ButtonBase(c.Key(tr.ID)).Height(54).PaddingX(12).Gap(14).Radius(10).AlignItems(ui.Center).FocusRing(false).Label(tr.Name).
+	// 歌曲行内有独立入口，以组合控件暴露子项，避免专辑和收藏被父按钮折叠。
+	row := ui.ButtonBase(c.Key(tr.ID)).Role(ui.RoleGroup).Height(54).PaddingX(12).Gap(14).Radius(10).AlignItems(ui.Center).FocusRing(false).Label(tr.Name).
 		ContextMenu(a.songItems(tr, pid))
 	hovered := row.Hovered()
 	bg := ui.Transparent
@@ -526,14 +544,22 @@ func (a *app) trackRowPlay(c *ui.Context, tracks []music.Track, i int, covers bo
 			a.artistLinks(c, tr, p.muted, p.text).FontSize(12.5).SingleLine().Shrink(1).MinWidth(0)
 		})
 		if wide {
-			album := ui.RichText(c).Grow(2).Basis(0).MinWidth(0).FontSize(12.5).TextColor(p.muted).SingleLine()
-			album.Children(func() {
-				if tr.Album.ID == "" || !a.trackLib(tr).can("album") {
-					ui.Text(c, tr.Album.Name)
-				} else {
-					a.link(c.Key("album"), tr.Album.Name, p.muted, p.text, route{page: pageAlbum, src: tr.Source, id: tr.Album.ID})
+			if tr.Album.ID == "" || !a.trackLib(tr).can("album") {
+				ui.Text(c, tr.Album.Name).Grow(2).Basis(0).MinWidth(0).FontSize(12.5).TextColor(p.muted).SingleLine()
+			} else {
+				album := ui.ButtonBase(c.Key("album")).Grow(2).Basis(0).MinWidth(0).Height(32).Radius(4).
+					Label(tr.Album.Name).Tooltip(Tf("Go to Album: %s", tr.Album.Name))
+				color := p.muted
+				if album.Hovered() || album.Focused() {
+					color = p.text
 				}
-			})
+				album.Children(func() {
+					ui.Text(c, tr.Album.Name).Grow(1).MinWidth(0).FontSize(12.5).TextColor(color).SingleLine()
+				})
+				album.OnClick(func() {
+					a.openPage(route{page: pageAlbum, src: tr.Source, id: tr.Album.ID})
+				})
+			}
 		}
 		// A liked song's heart shows; the others' as the pointer is on them.
 		ui.Box(c).Size(32, 32).Center().Children(func() {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"mygo-music/internal/i18n"
 	"mygo-music/internal/local"
 	"mygo-music/internal/lyrics"
 	"mygo-music/internal/music"
@@ -106,9 +107,12 @@ func framesTracks(a *app) []music.Track {
 	return tracks
 }
 
-// With MM_FRAMES set, saves a playlist's page.
+// 设置 MM_FRAMES 后保存歌单及专辑入口的明暗主题与悬停效果，供目视验收。
 func TestPlaylistFrame(t *testing.T) {
 	dir := framesDir(t)
+	language := i18n.Language()
+	i18n.SetLanguage(i18n.Chinese)
+	t.Cleanup(func() { i18n.SetLanguage(language) })
 	a := newTestApp()
 	a.account = &music.Account{ID: "1", Name: "Alex"}
 	tracks := framesTracks(a)
@@ -120,8 +124,23 @@ func TestPlaylistFrame(t *testing.T) {
 	a.playlists["10"] = &music.Playlist{ID: "10", Name: "Evening Walks", Owner: "Alex", Description: "For the long way home.", ImageURL: "cover:0", Mine: true, Tracks: tracks}
 	a.route = route{page: pagePlaylist, src: "fake", id: "10"}
 	tt := ui.NewTester(a.view, 1180, 780)
+	tt.SetDark(false)
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
 	settled(tt)
 	saveFrame(t, dir, "playlist.png", tt.Image())
+	album, ok := tt.Find("Polar Night")
+	if !ok {
+		t.Fatal("no album link")
+	}
+	tt.Move(album.X+album.W/2, album.Y+album.H/2)
+	settled(tt)
+	saveFrame(t, dir, "playlist-album-hover.png", tt.Image())
+	tt.SetDark(true)
+	settled(tt)
+	saveFrame(t, dir, "playlist-album-hover-dark.png", tt.Image())
+	tt.Move(0, 0)
+	settled(tt)
+	saveFrame(t, dir, "playlist-dark.png", tt.Image())
 }
 
 // With MM_FRAMES set, saves Now Playing with lyrics following a song.

@@ -326,6 +326,7 @@ var zhCN = map[string]string{
 	"Discard changes":                                        "放弃修改",
 	"Dock Only":                                              "仅程序坞",
 	"Dock and Menu Bar":                                      "程序坞与菜单栏",
+	"Duration":                                               "时长",
 	"Download and Install Automatically":                     "自动下载并安装",
 	"Download new versions in the background, to take effect the next time the app opens": "在后台下载新版本，下次打开时生效",
 	"Can reach %s":          "可访问 %s",

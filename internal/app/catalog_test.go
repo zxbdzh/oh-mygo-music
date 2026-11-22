@@ -538,6 +538,29 @@ func TestAlbumLinkInRow(t *testing.T) {
 	}
 }
 
+// 专辑入口收到键盘确认时只打开专辑，避免嵌套歌曲行同时开始播放。
+func TestAlbumKeyboardInRow(t *testing.T) {
+	a := newTestApp()
+	track := music.Track{ID: "2", Name: "起风了", Album: music.Album{ID: "8", Name: "迷跡波"}}
+	a.artists["13"] = &artistData{page: &music.ArtistPage{Artist: music.Artist{ID: "13", Name: "丙"}, Tracks: []music.Track{track}}}
+	a.open(route{page: pageArtist, id: "13"})
+	tester := ui.NewTester(a.view, 1200, 800)
+	settled(tester)
+	for range tester.AccessAll() {
+		tester.Key(0, ui.KeyTab)
+		album, ok := tester.Access(track.Album.Name)
+		if ok && album.Focused {
+			tester.Key(0, ui.KeyEnter)
+			settled(tester)
+			if a.route != (route{page: pageAlbum, src: "fake", id: "8"}) || a.pl.Current() != nil {
+				t.Fatalf("opened %+v, playing %+v", a.route, a.pl.Current())
+			}
+			return
+		}
+	}
+	t.Fatal("album entry could not receive keyboard focus")
+}
+
 // Save on an album saves it at once and asks the source to, and the list of
 // those saved loads anew once it took it.
 func TestSaveAlbum(t *testing.T) {
