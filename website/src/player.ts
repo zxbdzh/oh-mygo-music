@@ -1,11 +1,10 @@
 import { createSignal } from 'solid-js'
 
-// The song the window in the hero plays.
+// 保留歌曲元数据供演示界面展示，实际音频播放已关闭。
 export const track = {
   title: '春日影',
   artist: 'MyGO!!!!!',
   album: '迷跡波',
-  src: '/haruhikage.m4a',
   duration: 281,
 }
 
@@ -14,47 +13,16 @@ const [position, setPosition] = createSignal(62)
 const [liked, setLiked] = createSignal(false)
 export { playing, position, liked, setLiked }
 
-// Made on the first play, so the page doesn't download the song until then.
-let audio: HTMLAudioElement | undefined
-let frame = 0
-
-function element() {
-  if (audio) return audio
-  audio = new Audio(track.src)
-  audio.loop = true
-  audio.currentTime = position()
-  // The browser can pause it on its own, from the media keys or another tab.
-  audio.addEventListener('pause', () => {
-    setPlaying(false)
-    cancelAnimationFrame(frame)
-  })
-  return audio
-}
-
-// timeupdate only fires a few times a second, too coarse for the progress bar.
-function tick() {
-  if (audio) setPosition(audio.currentTime)
-  frame = requestAnimationFrame(tick)
-}
-
 export function play() {
-  if (playing()) return
-  setPlaying(true)
-  element()
-    .play()
-    .then(() => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(tick)
-    })
-    .catch(() => setPlaying(false))
+  setPlaying(false)
 }
 
 export function pause() {
-  audio?.pause()
+  setPlaying(false)
 }
 
 export function toggle() {
-  playing() ? pause() : play()
+  setPlaying(false)
 }
 
 export function seek(fraction: number) {
