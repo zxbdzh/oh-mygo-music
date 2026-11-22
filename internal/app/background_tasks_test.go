@@ -46,6 +46,36 @@ func TestBackgroundTaskCenterCollapseAndReopen(t *testing.T) {
 	}
 }
 
+// 折叠入口随任务完成、失败和重试更新状态，并能展开任务中心。
+func TestBackgroundTaskCollapsedStatus(t *testing.T) {
+	a := newTestApp()
+	running := a.newBackgroundTask("Scan", "First")
+	done := a.newBackgroundTask("Scan", "Second")
+	done.update(done.generation, backgroundTaskSucceeded, "Complete")
+	a.backgroundTasksOpen = false
+	tester := ui.NewTester(func(context *ui.Context) {
+		a.pal = paletteFor(context.Theme())
+		a.backgroundTasksLayer(context)
+	}, 800, 600)
+	tester.Frame()
+	if _, ok := tester.Find("In progress"); !ok {
+		t.Fatal("running task was not shown in the collapsed center")
+	}
+	running.update(running.generation, backgroundTaskFailed, "Failed")
+	tester.Frame()
+	if _, ok := tester.Find("Failed"); !ok {
+		t.Fatal("failure was not shown in the collapsed center")
+	}
+	running.state = backgroundTaskSucceeded
+	tester.Frame()
+	if _, ok := tester.Find("Completed"); !ok {
+		t.Fatal("completion was not shown in the collapsed center")
+	}
+	if err := tester.Click("Background Tasks (2)"); err != nil || !a.backgroundTasksOpen {
+		t.Fatalf("collapsed center did not open: %v", err)
+	}
+}
+
 // 多个任务超出面板时，滚动后仍能打开较早的任务。
 func TestBackgroundTaskCenterScrollsToOlderTask(t *testing.T) {
 	a := newTestApp()
@@ -390,6 +420,12 @@ func TestBackgroundTaskFrame(t *testing.T) {
 	}
 	settled(tester)
 	saveFrame(t, dir, "background-task-collapsed-playing.png", tester.Image())
+	running.update(running.generation, backgroundTaskSucceeded, T("Online link ready"))
+	tester.Frame()
+	saveFrame(t, dir, "background-task-collapsed-completed.png", tester.Image())
+	running.state = backgroundTaskFailed
+	tester.Frame()
+	saveFrame(t, dir, "background-task-collapsed-failed.png", tester.Image())
 	for index := range 4 {
 		extra := a.newBackgroundTask(T("Share Card"), fmt.Sprintf("分享任务 %d · The Polar Lights", index+3))
 		extra.update(extra.generation, backgroundTaskSucceeded, T("Online link ready"))

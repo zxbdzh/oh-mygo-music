@@ -110,6 +110,9 @@ func (a *app) backgroundTasksLayer(c *ui.Context) {
 	}
 	width, height := c.Size()
 	panelWidth := min(360, max(1, width-32))
+	if !a.backgroundTasksOpen {
+		panelWidth = min(190, max(1, width-32))
+	}
 	bottom := float32(playerBarHeight + 18)
 	if a.nowPlaying {
 		// 播放页的浮动控制栏含内外留白，需要比普通页面多留出垂直空间。
@@ -120,19 +123,45 @@ func (a *app) backgroundTasksLayer(c *ui.Context) {
 		Width(panelWidth).MaxHeight(panelHeight).AlignItems(ui.Stretch).
 		Radius(12).Background(a.pal.sidebar).Border(1, a.pal.hairline).Children(func() {
 		label := fmt.Sprintf("%s (%d)", T("Background Tasks"), len(a.backgroundTasks))
+		counts := [4]int{}
+		for _, task := range a.backgroundTasks {
+			counts[task.state]++
+		}
+		state, status := backgroundTaskCanceled, T("Canceled")
+		// 出错优先提示，避免并行任务仍在运行时掩盖失败。
+		if counts[backgroundTaskFailed] > 0 {
+			state, status = backgroundTaskFailed, T("Failed")
+		} else if counts[backgroundTaskRunning] > 0 {
+			state, status = backgroundTaskRunning, T("In progress")
+		} else if counts[backgroundTaskSucceeded] > 0 {
+			state, status = backgroundTaskSucceeded, T("Completed")
+		}
+		summary := fmt.Sprintf("%s %d · %s %d · %s %d · %s %d",
+			T("In progress"), counts[backgroundTaskRunning], T("Completed"), counts[backgroundTaskSucceeded],
+			T("Failed"), counts[backgroundTaskFailed], T("Canceled"), counts[backgroundTaskCanceled])
 		ui.ButtonBase(c.Key("background-task-toggle")).Label(label).
-			Padding(14, 16).AlignItems(ui.Center).Gap(10).OnClick(func() {
+			Tooltip(summary).Padding(14, 16).AlignItems(ui.Center).Gap(10).OnClick(func() {
 			a.backgroundTasksOpen = !a.backgroundTasksOpen
 		}).Children(func() {
-			ui.Icon(c, iconQueue).Size(16, 16).TextColor(a.pal.muted)
-			ui.Text(c, T("Background Tasks")).FontSize(14).FontWeight(600).TextColor(a.pal.text)
-			ui.Box(c).Size(22, 22).Radius(11).Background(a.pal.hover).Center().Children(func() {
-				ui.Text(c, fmt.Sprint(len(a.backgroundTasks))).FontSize(11).TextColor(a.pal.muted)
-			})
-			ui.Box(c).Grow(1)
 			if a.backgroundTasksOpen {
+				ui.Icon(c, iconQueue).Size(16, 16).TextColor(a.pal.muted)
+				ui.Text(c, T("Background Tasks")).FontSize(14).FontWeight(600).TextColor(a.pal.text)
+				ui.Box(c).Size(22, 22).Radius(11).Background(a.pal.hover).Center().Children(func() {
+					ui.Text(c, fmt.Sprint(len(a.backgroundTasks))).FontSize(11).TextColor(a.pal.muted)
+				})
+				ui.Box(c).Grow(1)
 				ui.Icon(c, iconX).Size(14, 14).TextColor(a.pal.muted)
 			} else {
+				switch state {
+				case backgroundTaskRunning:
+					ui.Spinner(c).FontSize(15).TextColor(a.pal.accent).Label(status)
+				case backgroundTaskSucceeded:
+					ui.Icon(c, iconCheck).Size(16, 16).TextColor(a.pal.accent)
+				default:
+					ui.Icon(c, iconX).Size(16, 16).TextColor(a.pal.accent)
+				}
+				ui.Text(c, status).FontSize(13).FontWeight(600).TextColor(a.pal.text).SingleLine()
+				ui.Text(c, fmt.Sprint(counts[state])).FontSize(12).TextColor(a.pal.muted).Grow(1)
 				ui.Icon(c, iconForward).Size(14, 14).TextColor(a.pal.muted)
 			}
 		})
