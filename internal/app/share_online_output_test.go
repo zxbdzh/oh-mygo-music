@@ -37,9 +37,13 @@ func TestOnlineCardReusesShareAfterReopening(t *testing.T) {
 	if err := tester.Click("Copy Listen Link"); err != nil {
 		t.Fatal(err)
 	}
-	until(t, posted, func() bool { tester.Frame(); return copied != "" && len(a.sharing.png) > 0 })
+	awaitShareSucceeded(t, a, tester, posted)
+	if err := tester.Click("Copy Listen Link"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, posted, func() bool { tester.Frame(); return copied != "" })
 	first := copied
-	if err := tester.Click("Close Share Card"); err != nil {
+	if err := tester.Click("Close Background Task"); err != nil {
 		t.Fatal(err)
 	}
 	a.openShare(track)
@@ -52,13 +56,17 @@ func TestOnlineCardReusesShareAfterReopening(t *testing.T) {
 	if err := tester.Click("Copy Listen Link"); err != nil {
 		t.Fatal(err)
 	}
+	awaitShareSucceeded(t, a, tester, posted)
+	if err := tester.Click("Copy Listen Link"); err != nil {
+		t.Fatal(err)
+	}
 	until(t, posted, func() bool { tester.Frame(); return copied != "" || a.sharing.onlineError != nil })
 	if copied != first || uploads.Load() != 1 {
 		t.Fatalf("reopened share = %q, want %q; uploads=%d; error=%v", copied, first, uploads.Load(), a.sharing.onlineError)
 	}
 }
 
-// 已复制过的链接也必须重新验证，服务端判定失效时重新发布，不能沿用旧地址。
+// 回到编辑页再次准备时必须重新验证，服务端判定失效时重新发布。
 func TestOnlineCardReplacesExpiredOrRevokedLink(t *testing.T) {
 	var unavailable atomic.Bool
 	a, tester, posted, uploads := onlineCardOutputApp(t, func(writer http.ResponseWriter, request *http.Request) bool {
@@ -76,13 +84,25 @@ func TestOnlineCardReplacesExpiredOrRevokedLink(t *testing.T) {
 	if err := tester.Click("Copy Listen Link"); err != nil {
 		t.Fatal(err)
 	}
-	until(t, posted, func() bool { tester.Frame(); return copied != "" && len(a.sharing.png) > 0 })
-	unavailable.Store(true)
-	copied = ""
+	awaitShareSucceeded(t, a, tester, posted)
 	if err := tester.Click("Copy Listen Link"); err != nil {
 		t.Fatal(err)
 	}
-	until(t, posted, func() bool { tester.Frame(); return copied != "" && len(a.sharing.png) > 0 })
+	until(t, posted, func() bool { tester.Frame(); return copied != "" })
+	unavailable.Store(true)
+	copied = ""
+	if err := tester.Click("Open task: Online card · "); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click("Copy Listen Link"); err != nil {
+		t.Fatal(err)
+	}
+	awaitShareSucceeded(t, a, tester, posted)
+	unavailable.Store(false)
+	if err := tester.Click("Copy Listen Link"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, posted, func() bool { tester.Frame(); return copied != "" })
 	if copied != "https://share.example/s/listening-2" || uploads.Load() != 2 {
 		t.Fatalf("invalidated link reused: link=%q uploads=%d", copied, uploads.Load())
 	}
@@ -107,18 +127,29 @@ func TestOnlineCardReuseFailureRestoresControlsWithoutCopyingStaleLink(t *testin
 	if err := tester.Click("Copy Listen Link"); err != nil {
 		t.Fatal(err)
 	}
-	until(t, posted, func() bool { tester.Frame(); return copied != "" && len(a.sharing.png) > 0 })
-	first := copied
-	fail.Store(true)
-	copied = ""
+	awaitShareSucceeded(t, a, tester, posted)
 	if err := tester.Click("Copy Listen Link"); err != nil {
 		t.Fatal(err)
 	}
-	until(t, posted, func() bool { tester.Frame(); return a.sharing.onlineError != nil && !a.sharing.onlinePublishing })
+	until(t, posted, func() bool { tester.Frame(); return copied != "" })
+	first := copied
+	fail.Store(true)
+	copied = ""
+	if err := tester.Click("Open task: Online card · "); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click("Copy Listen Link"); err != nil {
+		t.Fatal(err)
+	}
+	awaitShareFailed(t, a, tester, posted)
 	if copied != "" || uploads.Load() != 1 {
 		t.Fatal("failed reuse copied a stale link or uploaded audio again")
 	}
 	fail.Store(false)
+	if err := tester.Click("Retry"); err != nil {
+		t.Fatal(err)
+	}
+	awaitShareSucceeded(t, a, tester, posted)
 	if err := tester.Click("Copy Listen Link"); err != nil {
 		t.Fatal(err)
 	}
@@ -136,6 +167,10 @@ func TestCopyShareCardPublishesAndEncodesListeningLink(t *testing.T) {
 	copyImage = func(data []byte) error { copied <- data; return nil }
 	defer func() { copyImage = previous }()
 	until(t, posted, func() bool { tester.Frame(); return len(a.sharing.png) > 0 })
+	if err := tester.Click("Copy Image"); err != nil {
+		t.Fatal(err)
+	}
+	awaitShareSucceeded(t, a, tester, posted)
 	if err := tester.Click("Copy Image"); err != nil {
 		t.Fatal(err)
 	}
@@ -167,6 +202,10 @@ func TestOnlineCardCopyRetriesAfterAudioFailure(t *testing.T) {
 	default:
 	}
 	fake(a).stream = stream
+	if err := tester.Click("Retry"); err != nil {
+		t.Fatal(err)
+	}
+	awaitShareSucceeded(t, a, tester, posted)
 	if err := tester.Click("Copy Image"); err != nil {
 		t.Fatal(err)
 	}
@@ -177,9 +216,9 @@ func TestOnlineCardCopyRetriesAfterAudioFailure(t *testing.T) {
 	}
 }
 
-// 生成中不能退出、改选或重复导出，Escape 和点击遮罩也必须保持锁定。
-func TestOnlineCardLoadingBlocksInteractionUntilFinished(t *testing.T) {
-	a, tester, posted, uploads := onlineCardOutputApp(t)
+// 分享准备期间播放器仍可操作，且后台完成不能自动写入剪贴板。
+func TestOnlineCardRunsInBackgroundUntilExplicitCopy(t *testing.T) {
+	a, _, posted, uploads := onlineCardOutputApp(t)
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var releaseOnce sync.Once
@@ -195,36 +234,46 @@ func TestOnlineCardLoadingBlocksInteractionUntilFinished(t *testing.T) {
 	previous := copyImage
 	copyImage = func([]byte) error { copied <- struct{}{}; return nil }
 	defer func() { copyImage = previous }()
+	underlyingActions := 0
+	tester := ui.NewTester(func(context *ui.Context) {
+		a.pal = paletteFor(context.Theme())
+		ui.Button(context, "Underlying action").OnClick(func() { underlyingActions++ })
+		a.shareDialog(context)
+		a.backgroundTasksLayer(context)
+	}, 1200, 850)
 	until(t, posted, func() bool { tester.Frame(); return len(a.sharing.png) > 0 })
 	if err := tester.Click("Copy Image"); err != nil {
 		t.Fatal(err)
 	}
 	wait(t, started, "audio request")
+	draft := a.sharing
 	tester.Frame()
-	for _, control := range []string{"Cancel Upload", "Close Share Card", "Copy Lyrics", "Copy Image", "Audio Quality"} {
-		if err := tester.Click(control); err == nil {
-			t.Fatalf("%s remained interactive during generation", control)
-		}
-	}
-	tester.Key(0, ui.KeyEscape)
-	tester.ClickAt(2, 2)
-	tester.Frame()
-	if a.sharing == nil || !a.sharing.open || !a.sharing.onlinePublishing {
-		t.Fatal("loading modal was dismissed")
+	if err := tester.Click("Underlying action"); err != nil || underlyingActions != 1 {
+		t.Fatalf("background task blocked the player: clicks=%d, error=%v", underlyingActions, err)
 	}
 	unblock()
+	until(t, posted, func() bool {
+		tester.Frame()
+		return draft.backgroundTask.state == backgroundTaskSucceeded &&
+			len(draft.png) > 0 && draft.pngURL == draft.onlineURL
+	})
+	select {
+	case <-copied:
+		t.Fatal("background completion wrote the clipboard")
+	default:
+	}
+	if err := tester.Click("Copy Image"); err != nil {
+		t.Fatal(err)
+	}
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.status == "Image copied" })
 	wait(t, copied, "card after loading")
 	if uploads.Load() != 1 {
 		t.Fatalf("uploads=%d, want one", uploads.Load())
 	}
-	if err := tester.Click("Close Share Card"); err != nil {
-		t.Fatalf("dialog did not restore controls: %v", err)
-	}
 }
 
-// 连历史查询阶段也要锁住底层点击与快捷键，查询失败后恢复面板而不触发任何导出。
-func TestOnlineCardLookupLoadingBlocksUnderlyingActions(t *testing.T) {
+// 历史查询也在后台运行，失败只展示任务错误而不触发导出。
+func TestOnlineCardLookupLeavesUnderlyingActionsAvailable(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var releaseOnce sync.Once
@@ -248,6 +297,7 @@ func TestOnlineCardLookupLoadingBlocksUnderlyingActions(t *testing.T) {
 			underlyingActions++
 		}
 		a.shareDialog(context)
+		a.backgroundTasksLayer(context)
 	}, 1200, 850)
 	until(t, posted, func() bool { tester.Frame(); return len(a.sharing.png) > 0 })
 	if err := tester.Click("Copy Listen Link"); err != nil {
@@ -259,20 +309,20 @@ func TestOnlineCardLookupLoadingBlocksUnderlyingActions(t *testing.T) {
 	tester.Key(0, ui.KeyEscape)
 	tester.ClickAt(10, 10)
 	tester.Frame()
-	if underlyingActions != 0 || a.sharing == nil || !a.sharing.open || !a.sharing.onlinePublishing {
-		t.Fatalf("lookup modal leaked input: underlyingActions=%d", underlyingActions)
+	if underlyingActions != 2 || a.sharing.open || !a.sharing.onlinePublishing {
+		t.Fatalf("background lookup blocked input: underlyingActions=%d", underlyingActions)
 	}
 	unblock()
 	until(t, posted, func() bool { tester.Frame(); return !a.sharing.onlinePublishing })
-	if uploads.Load() != 0 || a.sharing.pendingOutput != shareOutputNone {
+	if uploads.Load() != 0 {
 		t.Fatal("lookup failure started an export")
 	}
-	if err := tester.Click("Close Share Card"); err != nil {
-		t.Fatalf("failed lookup did not restore controls: %v", err)
+	if err := tester.Click("Close Background Task"); err != nil {
+		t.Fatalf("failed lookup did not expose its task: %v", err)
 	}
 }
 
-// 点击一次复制听歌链接即可发布；之后保存 PNG 复用同一分享，不重复上传。
+// 发布完成后明确复制或保存，同一任务结果不重复上传或自动弹出保存窗口。
 func TestCopyListenLinkAndSaveCardReusePublishedShare(t *testing.T) {
 	a, tester, posted, uploads := onlineCardOutputApp(t)
 	var link string
@@ -290,7 +340,17 @@ func TestCopyListenLinkAndSaveCardReusePublishedShare(t *testing.T) {
 	if err := tester.Click("Copy Listen Link"); err != nil {
 		t.Fatal(err)
 	}
-	until(t, posted, func() bool { tester.Frame(); return link != "" && len(a.sharing.png) > 0 })
+	awaitShareSucceeded(t, a, tester, posted)
+	if link != "" {
+		t.Fatal("background task copied a link without a click")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("background task saved an image without a click")
+	}
+	if err := tester.Click("Copy Listen Link"); err != nil {
+		t.Fatal(err)
+	}
+	until(t, posted, func() bool { tester.Frame(); return link != "" })
 	if link != "https://share.example/s/listening-1" {
 		t.Fatalf("copied link %q", link)
 	}
@@ -341,8 +401,15 @@ func TestCardLinkTargetAndChangedSelectionKeepCorrectQRCode(t *testing.T) {
 	if err := tester.Click("Copy Image"); err != nil {
 		t.Fatal(err)
 	}
+	awaitShareSucceeded(t, a, tester, posted)
+	if err := tester.Click("Copy Image"); err != nil {
+		t.Fatal(err)
+	}
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.status == "Image copied" })
 	assertCardListeningQR(t, wait(t, copied, "online card"), "https://share.example/s/listening-1")
+	if err := tester.Click("Open task: Online card · "); err != nil {
+		t.Fatal(err)
+	}
 	if err := tester.Click("Audio Quality"); err != nil {
 		t.Fatal(err)
 	}
@@ -353,11 +420,64 @@ func TestCardLinkTargetAndChangedSelectionKeepCorrectQRCode(t *testing.T) {
 	if err := tester.Click("Copy Image"); err != nil {
 		t.Fatal(err)
 	}
+	awaitShareSucceeded(t, a, tester, posted)
+	if err := tester.Click("Copy Image"); err != nil {
+		t.Fatal(err)
+	}
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.status == "Image copied" })
 	assertCardListeningQR(t, wait(t, copied, "updated card"), "https://share.example/s/listening-2")
 	if uploads.Load() != 2 {
 		t.Fatalf("updated snapshot uploads = %d, want two", uploads.Load())
 	}
+}
+
+func awaitShareSucceeded(t *testing.T, a *app, tester *ui.Tester, posted chan func()) {
+	t.Helper()
+	draft := a.sharing
+	until(t, posted, func() bool {
+		tester.Frame()
+		return !draft.onlinePublishing && len(draft.png) > 0 && draft.pngURL == draft.onlineURL && draft.onlineURL != ""
+	})
+	tester.Frame()
+}
+
+func awaitShareFailed(t *testing.T, a *app, tester *ui.Tester, posted chan func()) {
+	t.Helper()
+	draft := a.sharing
+	until(t, posted, func() bool {
+		tester.Frame()
+		return !draft.onlinePublishing && draft.onlineError != nil
+	})
+	tester.Frame()
+}
+
+// 结果卡可能留存很久，明确复制时仍要检查撤销状态，不能复制已失效链接。
+func TestBackgroundShareResultRechecksRevocationBeforeCopy(t *testing.T) {
+	var revoked atomic.Bool
+	a, tester, posted, _ := onlineCardOutputApp(t, func(writer http.ResponseWriter, request *http.Request) bool {
+		if revoked.Load() && request.URL.Path == "/api/shares/reuse" {
+			writer.WriteHeader(http.StatusNoContent)
+			return true
+		}
+		return false
+	})
+	previous := copyText
+	copied := false
+	copyText = func(string) error { copied = true; return nil }
+	defer func() { copyText = previous }()
+	until(t, posted, func() bool { tester.Frame(); return len(a.sharing.png) > 0 })
+	if err := tester.Click("Create Listen Link"); err != nil {
+		t.Fatal(err)
+	}
+	awaitShareSucceeded(t, a, tester, posted)
+	revoked.Store(true)
+	if err := tester.Click("Copy Listen Link"); err != nil {
+		t.Fatal(err)
+	}
+	if copied {
+		t.Fatal("a task result copied a revoked link")
+	}
+	awaitShareFailed(t, a, tester, posted)
 }
 
 func onlineCardOutputApp(t *testing.T, intercept ...func(http.ResponseWriter, *http.Request) bool) (*app, *ui.Tester, chan func(), *atomic.Int32) {
@@ -416,6 +536,7 @@ func onlineCardOutputApp(t *testing.T, intercept ...func(http.ResponseWriter, *h
 	tester := ui.NewTester(func(context *ui.Context) {
 		a.pal = paletteFor(context.Theme())
 		a.shareDialog(context)
+		a.backgroundTasksLayer(context)
 	}, 1200, 850)
 	tester.Frame()
 	return a, tester, posted, &uploads
@@ -463,21 +584,31 @@ func TestShareOnlineCardLinkFrame(t *testing.T) {
 	for _, size := range []struct {
 		width, height int
 		name          string
+		dark          bool
 	}{
-		{1200, 850, "online-card-link-desktop.png"}, {760, 640, "online-card-link-compact.png"},
+		{1200, 850, "online-card-link-desktop.png", true},
+		{1200, 850, "online-card-link-light.png", false},
+		{760, 640, "online-card-link-compact.png", true},
 	} {
 		tester := ui.NewTester(func(context *ui.Context) { a.pal = paletteFor(context.Theme()); a.shareDialog(context) }, size.width, size.height)
-		tester.SetDark(true)
+		tester.SetDark(size.dark)
 		tester.Frame()
 		a.requestShareRender()
 		until(t, posted, func() bool { tester.Frame(); return a.sharing.preview != nil })
 		settled(tester)
 		saveFrame(t, directory, size.name, tester.Image())
+		if err := tester.Click(T("Default View")); err != nil {
+			t.Fatal(err)
+		}
+		settled(tester)
+		saveFrame(t, directory, "menu-"+size.name, tester.Image())
+		tester.CloseMenu()
 		a.sharing.onlinePublishing = true
 		a.sharing.status = T("Checking existing shares…")
 		tester.Frame()
 		saveFrame(t, directory, "loading-"+size.name, tester.Image())
 		a.sharing.onlinePublishing = false
+		a.sharing.status = ""
 		tester.Frame()
 	}
 }
@@ -520,7 +651,7 @@ func TestShareClipTimelineRealFrame(t *testing.T) {
 	tester := ui.NewTester(func(c *ui.Context) {
 		a.pal = paletteFor(c.Theme())
 		a.shareDialog(c)
-	}, 1440, 900)
+	}, 880, 580)
 	tester.SetDark(true)
 	a.requestShareRender()
 	until(t, posted, func() bool {

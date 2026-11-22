@@ -1,13 +1,56 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 )
+
+// 领取结果仍校验服务端有效性；只有这次明确点击允许后续剪贴板或文件操作。
+func (a *app) deliverBackgroundShare(draft *shareDraft, output shareOutput) {
+	task := draft.backgroundTask
+	if task == nil || task.removed || task.state != backgroundTaskSucceeded || draft.exporting || a.quitting {
+		return
+	}
+	draft.exporting = true
+	task.status = T("Checking existing shares…")
+	client, metadata, cover, generation := draft.shareClient, *draft.metadata, draft.shareCover, task.generation
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		result, err := client.reuse(ctx, metadata, cover)
+		a.post(func() {
+			draft.exporting = false
+			if a.quitting || task.removed || task.generation != generation {
+				return
+			}
+			if err == nil && (result == nil || result.URL != draft.onlineURL) {
+				err = errors.New(T("Share is no longer available. Retry to prepare it again."))
+			}
+			if err != nil {
+				draft.onlineError = err
+				task.state, task.status = backgroundTaskFailed, T("Could not verify share. Retry or open to edit.")
+				task.retry = func() { a.retryBackgroundShare(draft) }
+				return
+			}
+			task.status = T("Online link ready")
+			switch output {
+			case shareOutputCopyLink:
+				a.copyPublishedShareLink(draft)
+			case shareOutputCopyImage:
+				a.copyPreparedShareImage(draft)
+			case shareOutputSaveImage:
+				a.savePreparedShareImage(draft)
+			}
+		})
+	}()
+}
 
 // 系统写入边界可替换，自动验收不接触用户的剪贴板。
 var copyImage = func(data []byte) error {
@@ -25,8 +68,7 @@ var saveCardAs = func(a *app, name, directory string) (string, error) {
 type shareOutput uint8
 
 const (
-	shareOutputNone shareOutput = iota
-	shareOutputCopyImage
+	shareOutputCopyImage shareOutput = iota
 	shareOutputSaveImage
 	shareOutputCopyLink
 )
@@ -35,43 +77,12 @@ func (a *app) prepareOnlineCardOutput(draft *shareDraft, output shareOutput) boo
 	if !draft.cardOnline && output != shareOutputCopyLink {
 		return false
 	}
-	if draft.onlinePublishing || draft.exporting || draft.pendingOutput != shareOutputNone {
+	if draft.onlinePublishing || draft.exporting {
 		return true
 	}
-	// 每次导出重新确认服务端有效期与撤销状态，不能仅凭本地 URL 判断可以复用。
-	draft.pendingOutput, draft.pendingOutputRevision = output, draft.onlineRevision
+	// 每次导出重新确认服务端有效期与撤销状态，不能仅凭本地 URL 判断。
 	a.publishOnlineShare(draft)
-	if !draft.onlinePublishing {
-		draft.pendingOutput = shareOutputNone
-	}
 	return true
-}
-
-func (a *app) resumeShareOutput(draft *shareDraft) {
-	if a.sharing != draft || !draft.open || draft.pendingOutput == shareOutputNone {
-		return
-	}
-	if draft.pendingOutputRevision != draft.onlineRevision {
-		draft.pendingOutput = shareOutputNone
-		return
-	}
-	if draft.onlinePublishing || !a.onlineLinkMatchesDraft(draft) {
-		return
-	}
-	output := draft.pendingOutput
-	if output != shareOutputCopyLink && (len(draft.png) == 0 || draft.pngURL != draft.onlineURL) {
-		return
-	}
-	// 发布和卡片重绘都完成后再执行原来的导出动作，不能拿上传前的旧 PNG。
-	draft.pendingOutput = shareOutputNone
-	switch output {
-	case shareOutputCopyImage:
-		a.copyPreparedShareImage(draft)
-	case shareOutputSaveImage:
-		a.savePreparedShareImage(draft)
-	case shareOutputCopyLink:
-		a.copyPublishedShareLink(draft)
-	}
 }
 
 func (a *app) saveShareImage(draft *shareDraft) {
@@ -100,7 +111,7 @@ func (a *app) savePreparedShareImage(draft *shareDraft) {
 					a.toast = T("Could not save display preferences")
 				}
 			}
-			if a.sharing != draft || !draft.open {
+			if a.sharing != draft && draft.backgroundTask == nil {
 				return
 			}
 			draft.exporting = false
@@ -111,6 +122,9 @@ func (a *app) savePreparedShareImage(draft *shareDraft) {
 				draft.status = T("Save canceled")
 			default:
 				draft.status = T("Image saved")
+			}
+			if draft.backgroundTask != nil {
+				draft.backgroundTask.status = draft.status
 			}
 		})
 	}()
@@ -153,13 +167,16 @@ func (a *app) copyPreparedShareImage(draft *shareDraft) {
 	go func() {
 		err := copy(data)
 		a.post(func() {
-			if a.sharing != draft || !draft.open {
+			if a.sharing != draft && draft.backgroundTask == nil {
 				return
 			}
 			draft.exporting = false
 			draft.status = T("Image copied")
 			if err != nil {
 				draft.status = T("Could not copy image")
+			}
+			if draft.backgroundTask != nil {
+				draft.backgroundTask.status = draft.status
 			}
 		})
 	}()

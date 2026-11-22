@@ -34,7 +34,7 @@ func (a *app) view(c *ui.Context) {
 		c.Root().Background(ui.Transparent)
 	}
 	root := ui.Box(c).Fill()
-	if !c.Focused(a.searchBox) && a.sharing == nil {
+	if !c.Focused(a.searchBox) && (a.sharing == nil || !a.sharing.open) {
 		// Space plays and pauses wherever the focus is, as in Music. On
 		// the container around everything, it comes before a button the
 		// pointer focused, which would take Space as a click; on the
@@ -72,6 +72,7 @@ func (a *app) view(c *ui.Context) {
 		})
 		a.nowPlayingLayer(c, npOpen, npSettled)
 	})
+	a.backgroundTasksLayer(c)
 	a.signInDialog(c, a.pal, false)
 	a.playlistNameDialog(c)
 	a.deletePlaylistDialog(c)
@@ -86,7 +87,7 @@ func (a *app) view(c *ui.Context) {
 }
 
 func (a *app) shortcuts(c *ui.Context) {
-	if a.sharing != nil {
+	if a.sharing != nil && a.sharing.open {
 		return
 	}
 	// The side buttons of a mouse, the keys of keyboards that have them

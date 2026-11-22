@@ -156,6 +156,10 @@ type app struct {
 	comments     commentState
 	tabCount     rollState // the count on the comments' tab, as it rolls
 
+	backgroundTasks     []*backgroundTask
+	nextBackgroundTask  uint64
+	backgroundTasksOpen bool
+
 	radioStarting string // the radio asked for its first songs, or ""
 	stationAt     int    // which of a few stations their switch has chosen
 
@@ -478,6 +482,7 @@ func Run() error {
 	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
 		a.quitting = true
+		a.stopBackgroundTasks()
 		if a.sharing != nil {
 			a.stopSharePreview(a.sharing)
 		}

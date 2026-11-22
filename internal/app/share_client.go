@@ -75,6 +75,7 @@ type shareMetadata struct {
 	Quality             string            `json:"quality"`
 	Template            string            `json:"template"`
 	CardSquare          bool              `json:"cardSquare"`
+	DefaultView         string            `json:"defaultView,omitempty"`
 	Mode                string            `json:"mode"`
 	DurationMs          int64             `json:"durationMs"`
 	Lyrics              []shareLyricLine  `json:"lyrics"`
@@ -380,6 +381,8 @@ func (c *shareClient) request(
 		return nil, err
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
+	// 桌面请求也须声明服务自身的来源，才能通过公网服务的跨站校验。
+	request.Header.Set("Origin", c.baseURL)
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}

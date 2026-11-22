@@ -207,7 +207,11 @@ func TestShareOnlineDialogFrame(t *testing.T) {
 			{Text: "Until the night begins to glow", At: 8 * time.Second, End: 11 * time.Second, AtSource: true, EndSource: true},
 		},
 	}
-	tester := ui.NewTester(func(c *ui.Context) { a.pal = paletteFor(c.Theme()); a.shareDialog(c) }, 1200, 850)
+	tester := ui.NewTester(func(c *ui.Context) {
+		a.pal = paletteFor(c.Theme())
+		a.shareDialog(c)
+		a.backgroundTasksLayer(c)
+	}, 1200, 850)
 	tester.SetDark(true)
 	tester.Frame()
 	a.requestShareRender()
@@ -254,7 +258,11 @@ func TestSharePublishRetriesAfterPollingFailure(t *testing.T) {
 	}
 	posted := posts(a)
 	a.sharing = &shareDraft{open: true, selected: map[int]bool{}, onlineMode: "full", onlineQuality: "high", track: music.Track{ID: "retry", Source: "fake", Name: "Retry", Duration: 12000}}
-	tester := ui.NewTester(func(c *ui.Context) { a.pal = paletteFor(c.Theme()); a.shareDialog(c) }, 1200, 850)
+	tester := ui.NewTester(func(c *ui.Context) {
+		a.pal = paletteFor(c.Theme())
+		a.shareDialog(c)
+		a.backgroundTasksLayer(c)
+	}, 1200, 850)
 	tester.Frame()
 	if err := tester.Click("Create Listen Link"); err != nil {
 		t.Fatal(err)
@@ -263,7 +271,7 @@ func TestSharePublishRetriesAfterPollingFailure(t *testing.T) {
 	if a.sharing.onlineError == nil || a.sharing.onlineID != "retry-share" {
 		t.Fatalf("failed poll lost retry state: %+v", a.sharing)
 	}
-	if err := tester.Click("Create Listen Link"); err != nil {
+	if err := tester.Click("Retry"); err != nil {
 		t.Fatal(err)
 	}
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.onlineURL != "" })
@@ -348,6 +356,7 @@ func TestShareCardPublishesListeningLinkFromTheSelectedDownload(t *testing.T) {
 		a.pal = paletteFor(c.Theme())
 		a.songMenu(c, &track, 22, a.pal.text)
 		a.shareDialog(c)
+		a.backgroundTasksLayer(c)
 	}, 1200, 800)
 	tester.Frame()
 	if err := tester.Click("More"); err != nil {

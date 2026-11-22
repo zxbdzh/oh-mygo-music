@@ -17,49 +17,48 @@ var cardTemplates = []struct{ id, label string }{
 
 func (a *app) shareDialog(c *ui.Context) {
 	draft := a.sharing
-	if draft == nil {
+	if draft == nil || !draft.open {
 		return
+	}
+	if draft.backgroundTask != nil && !draft.onlinePublishing {
+		a.openBackgroundShare(draft)
+		draft = a.sharing
 	}
 	width, height := c.Size()
 	palette := a.pal
-	busy := draft.onlinePublishing || draft.pendingOutput != shareOutputNone || draft.exporting
-	// DialogBase 会在 Escape 或点击遮罩时改写 open；忙碌时只改局部值，保持模态与任务存活。
+	// 面板可见性与任务生命周期分离，Escape 或遮罩只关闭编辑页。
 	open := draft.open
 	ui.DialogBase(c.Key("share-card"), &open, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.5))
-		if busy {
-			panel.Width(min(420, width-48)).Padding(28).Radius(20).Gap(14).AlignItems(ui.Center).
-				Background(palette.bg).Border(1, palette.hairline)
-			ui.Spinner(c).FontSize(32).TextColor(palette.accent).Label(T("Preparing share"))
-			status := draft.status
-			if status == "" {
-				status = T("Preparing share…")
-			}
-			ui.Text(c, status).FontSize(15).FontWeight(600).TextColor(palette.text)
-			ui.Text(c, T("Please wait until processing finishes")).FontSize(13).TextColor(palette.muted)
-			ui.Text(c, draft.track.Name+" · "+draft.track.ArtistNames()).FontSize(12).TextColor(palette.muted).SingleLine()
-			return
-		}
-		panel.Width(min(1040, width-48)).Padding(24).Radius(20).Gap(18).Background(palette.bg).Border(1, palette.hairline)
+		panel.Width(min(1040, width-48)).Padding(20, 24).Radius(20).Gap(14).Background(palette.bg).Border(1, palette.hairline)
 		ui.Row(c).AlignItems(ui.Center).Gap(16).Children(func() {
-			ui.Column(c).Grow(1).Gap(4).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 				ui.Text(c, T("Share Card")).FontSize(20).FontWeight(700)
-				ui.Text(c, draft.track.Name+" · "+draft.track.ArtistNames()).FontSize(13).TextColor(palette.muted).SingleLine()
+				trackLabel := draft.track.Name
+				if artists := draft.track.ArtistNames(); artists != "" {
+					trackLabel += " · " + artists
+				}
+				ui.Text(c, trackLabel).FontSize(13).TextColor(palette.muted).SingleLine()
 			})
 			if iconButton(c.Key("close-share"), iconX, 20, palette.muted, T("Close Share Card")).Clicked() {
-				if draft.onlineCancel != nil {
-					draft.onlineCancel()
-				}
 				draft.open = false
 			}
 		})
 		a.shareControls(c, draft)
-		a.shareLinkControls(c, draft)
-		linesHeight := height - 310
+		// 两排设置占用固定高度，试听和结果状态需要另外预留空间。
+		linesHeight := height - 296
+		if draft.aggregateView != nil && len(uniqueAggregateSources(draft.track.AggregateSources)) > 1 {
+			linesHeight -= 42
+		}
+		if draft.status != "" {
+			linesHeight -= 20
+		}
 		if draft.onlineMode == "clip" {
 			if start, end, ok := draft.clipRange(); ok {
-				a.shareClipControls(c, draft, start, end)
-				linesHeight -= 88
+				ui.Column(c).Disabled(draft.onlinePublishing).Children(func() {
+					a.shareClipControls(c, draft, start, end)
+				})
+				linesHeight -= 96
 			}
 		}
 		ui.Row(c).Height(max(128, min(470, linesHeight))).Gap(24).AlignItems(ui.Stretch).Children(func() {
@@ -78,7 +77,7 @@ func (a *app) shareDialog(c *ui.Context) {
 					default:
 						for index, line := range a.shareLines(draft) {
 							row := ui.ButtonBase(c.Key(index)).Column().AlignItems(ui.Start).Padding(12, 14).Gap(6).Radius(10).
-								Disabled(draft.onlinePublishing || draft.exporting || draft.pendingOutput != shareOutputNone).Label(Tf("Select lyric %d", index+1))
+								Disabled(draft.onlinePublishing || draft.exporting).Label(Tf("Select lyric %d", index+1))
 							if draft.selected[index] {
 								row.Background(palette.accent.Alpha(0.12)).Border(1, palette.accent.Alpha(0.35))
 							}
@@ -137,40 +136,44 @@ func (a *app) shareDialog(c *ui.Context) {
 				}
 			})
 		})
-		ui.Row(c).Justify(ui.End).Gap(10).Children(func() {
+		ui.Column(c).Gap(6).Children(func() {
+			ui.Box(c).FillWidth().Height(1).Background(palette.hairline)
 			if draft.status != "" {
-				ui.Text(c, draft.status).FontSize(12).TextColor(palette.muted)
+				ui.Text(c, draft.status).FontSize(12).TextColor(palette.muted).SingleLine().Tooltip(draft.status)
 			}
-			ui.Spacer(c)
-			if ui.Button(c.Key("copy-online-link"), T("Copy Listen Link")).
-				Disabled(draft.onlinePublishing || draft.loading || draft.coverLoading || draft.exporting || draft.pendingOutput != shareOutputNone).Clicked() {
-				a.copyOnlineShareLink(draft)
-			}
-			if ui.PrimaryButton(c.Key("create-online-link"), T("Create Listen Link")).
-				Disabled(draft.onlinePublishing || draft.rendering || draft.loading || draft.coverLoading || draft.exporting || draft.pendingOutput != shareOutputNone).
-				Clicked() {
-				a.publishOnlineShare(draft)
-			}
-			if ui.Button(c, T("Copy Lyrics")).Disabled(len(a.shareFragment(draft)) == 0).Clicked() {
-				a.copyShareLyrics(draft)
-			}
-			if ui.Button(c, T("Copy Image")).Disabled(len(draft.png) == 0 || draft.exporting || draft.onlinePublishing || draft.pendingOutput != shareOutputNone).Clicked() {
-				a.copyShareImage(draft)
-			}
-			if ui.PrimaryButton(c, T("Save PNG")).Disabled(len(draft.png) == 0 || draft.exporting || draft.onlinePublishing || draft.pendingOutput != shareOutputNone).Clicked() {
-				a.saveShareImage(draft)
-			}
+			ui.Row(c).Wrap().Justify(ui.SpaceBetween).Gap(8).Children(func() {
+				ui.Row(c.Key("share-exports")).Gap(4).Children(func() {
+					imageDisabled := len(draft.png) == 0 || draft.exporting || draft.onlinePublishing
+					if a.shareAction(c.Key("copy-lyrics"), T("Copy Lyrics"), nil, len(a.shareFragment(draft)) == 0, false).Clicked() {
+						a.copyShareLyrics(draft)
+					}
+					if a.shareAction(c.Key("copy-image"), T("Copy Image"), nil, imageDisabled, false).Clicked() {
+						a.copyShareImage(draft)
+					}
+					if a.shareAction(c.Key("save-png"), T("Save PNG"), nil, imageDisabled, false).Clicked() {
+						a.saveShareImage(draft)
+					}
+				})
+				ui.Row(c.Key("share-link-actions")).Gap(6).Children(func() {
+					linkDisabled := draft.onlinePublishing || draft.loading || draft.coverLoading || draft.exporting
+					if a.shareAction(c.Key("copy-online-link"), T("Copy Listen Link"), iconCopy, linkDisabled, false).Clicked() {
+						a.copyOnlineShareLink(draft)
+					}
+					if a.shareAction(c.Key("create-online-link"), T("Create Listen Link"), iconLink, linkDisabled || draft.rendering, true).Clicked() {
+						a.publishOnlineShare(draft)
+					}
+				})
+			})
 		})
 	})
-	if !busy && !open {
+	if !open {
 		draft.open = false
 	}
 	if !draft.open {
 		a.stopSharePreview(draft)
-		if draft.onlineCancel != nil {
-			draft.onlineCancel()
+		if a.sharing == draft && draft.backgroundTask == nil {
+			a.sharing = nil
 		}
-		a.sharing = nil
 	}
 }
 
@@ -191,7 +194,7 @@ func (a *app) shareClipControls(c *ui.Context, draft *shareDraft, start, end tim
 			ui.Text(c, fmt.Sprintf("%s %s – %s", T("Clip Range:"), shareClipTime(start), shareClipTime(end))).FontSize(12).TextColor(a.pal.muted)
 			ui.Spacer(c)
 			if draft.clipPreviewLoading {
-				ui.Button(c.Key("stop-clip-preview"), T("Stop Preview")).OnClick(func() {
+				a.shareAction(c.Key("stop-clip-preview"), T("Stop Preview"), nil, draft.onlinePublishing, false).OnClick(func() {
 					a.stopSharePreview(draft)
 				})
 			} else if draft.clipPreview != nil {
@@ -199,7 +202,11 @@ func (a *app) shareClipControls(c *ui.Context, draft *shareDraft, start, end tim
 				if draft.clipPreviewActive && draft.clipPreview.Playing() {
 					toggleLabel = T("Pause Preview")
 				}
-				ui.Button(c.Key("toggle-clip-preview"), toggleLabel).OnClick(func() {
+				toggleIcon := iconPlay
+				if draft.clipPreviewActive && draft.clipPreview.Playing() {
+					toggleIcon = iconPause
+				}
+				a.shareAction(c.Key("toggle-clip-preview"), toggleLabel, toggleIcon, draft.onlinePublishing, false).OnClick(func() {
 					if draft.clipPreview.Playing() {
 						draft.clipPreview.Pause()
 						draft.clipPreviewActive = false
@@ -208,14 +215,14 @@ func (a *app) shareClipControls(c *ui.Context, draft *shareDraft, start, end tim
 					}
 					a.playSharePreview(draft)
 				})
-				ui.Button(c.Key("stop-clip-preview"), T("Stop Preview")).OnClick(func() {
+				a.shareAction(c.Key("stop-clip-preview"), T("Stop Preview"), nil, draft.onlinePublishing, false).OnClick(func() {
 					draft.clipPreview.Pause()
 					draft.clipPreviewActive = false
 					draft.clipHead = start
 					draft.clipPreview.Seek(start)
 				})
 			} else {
-				ui.Button(c.Key("preview-clip"), T("Preview Clip")).OnClick(func() { a.previewShareClip(draft) })
+				a.shareAction(c.Key("preview-clip"), T("Preview Clip"), iconPlay, draft.onlinePublishing, false).OnClick(func() { a.previewShareClip(draft) })
 			}
 		})
 		ui.RangeSlider(c.Key("clip-range"), &low, &high, 0, duration.Seconds(), 0).
@@ -266,150 +273,248 @@ func shareClipTime(at time.Duration) string {
 	return fmt.Sprintf("%d:%02d.%03d", seconds/60, seconds%60, at.Milliseconds()%1000)
 }
 
-func (a *app) shareControls(c *ui.Context, draft *shareDraft) {
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Disabled(draft.onlinePublishing || draft.exporting || draft.pendingOutput != shareOutputNone).Children(func() {
-		if draft.aggregateView != nil && len(uniqueAggregateSources(draft.track.AggregateSources)) > 1 {
-			source := aggregateViewSource(c, draft.aggregateView, &draft.track)
-			if queued, err := aggregateQueueTracks([]music.Track{draft.track}, draft.aggregateView.sourceChoices); err != nil {
-				draft.status = err.Error()
-			} else if queued[0].ID != draft.track.ID {
-				if draft.pendingAggregateTrackID != queued[0].ID {
-					draft.pendingAggregateTrackID = queued[0].ID
-					selectedTrack, selectedSource := queued[0], source
-					a.post(func() {
-						if a.sharing != draft || !draft.open {
-							return
-						}
-						draft.track = selectedTrack
-						a.stopSharePreview(draft)
-						draft.clipStart, draft.clipEnd, draft.clipHead = 0, 0, 0
-						draft.recordingSource = &selectedSource
-						draft.pendingAggregateTrackID = ""
-						draft.lines = nil
-						draft.selected = make(map[int]bool)
-						draft.hasSelectionAnchor = false
-						draft.timingReliable = false
-						draft.display = lyricDisplayCache{}
-						draft.onlineRevision++
-						a.loadShareLyrics(draft)
-						a.requestShareRender()
-					})
-				}
-			} else {
-				draft.recordingSource = &source
-			}
+func (a *app) shareAction(c *ui.Context, label string, icon *ui.SVG, disabled, primary bool) ui.Element {
+	palette := a.pal
+	button := ui.ButtonBase(c).Label(label).Height(34).PaddingX(12).Gap(7).Radius(8).
+		Disabled(disabled).FocusRingColor(palette.accent)
+	base, hover, pressed, text := ui.Transparent, palette.hover, palette.press, palette.text
+	if primary {
+		// 稍压暗主题强调色，让两种主题下的主操作白字都清晰可读。
+		base, text = palette.accent.MixOklab(ui.RGB(0, 0, 0), 0.14), palette.onAccent
+		hover, pressed = base.MixOklab(palette.bg, 0.08), base.MixOklab(ui.RGB(0, 0, 0), 0.15)
+	}
+	shareButtonFace(button, base, hover, pressed)
+	button.TextColor(text).Children(func() {
+		if icon != nil {
+			ui.Icon(c, icon).Size(15, 15)
 		}
-		modeLabel := T("Full Song")
-		if draft.onlineMode == "clip" {
-			modeLabel = T("Selected Clip")
+		ui.Text(c, label).FontSize(13).FontWeight(600).SingleLine()
+	})
+	return button
+}
+
+func shareButtonFace(button ui.Element, base, hover, pressed ui.Color) {
+	fill := base
+	if !button.IsDisabled() {
+		if button.Pressed() {
+			fill = pressed
+		} else if button.Hovered() {
+			fill = hover
 		}
-		mode := ui.Button(c.Key("online-mode"), modeLabel).Label(T("Listen Mode")).Disabled(draft.onlinePublishing).
-			Menu(func(menu *ui.Menu) {
-				if menu.Item(T("Full Song")).Radio(draft.onlineMode == "full").Chosen() {
-					a.stopSharePreview(draft)
-					draft.onlineMode = "full"
-					draft.onlineError = nil
-					draft.onlineRevision++
-					a.requestShareRender()
-				}
-				_, _, clipAvailable := shareClipRange(draft.lines, draft.selected, draft.track.Length(), draft.timingReliable)
-				if menu.Item(T("Selected Clip")).Radio(draft.onlineMode == "clip").
-					Disabled(!clipAvailable || draft.onlinePublishing).Chosen() {
-					draft.onlineMode = "clip"
-					draft.onlineError = nil
-					draft.onlineRevision++
-					a.requestShareRender()
-				}
-			})
-		if _, _, available := shareClipRange(draft.lines, draft.selected, draft.track.Length(), draft.timingReliable); !available {
-			mode.Tooltip(T("Clip mode requires selected lyrics with reliable timing"))
-		}
-		qualityLabel := qualityLevels[1].label
-		for _, quality := range qualityLevels {
-			if quality.level == draft.onlineQuality {
-				qualityLabel = quality.label
-			}
-		}
-		ui.Button(c.Key("online-quality"), T(qualityLabel)).Label(T("Audio Quality")).
-			Disabled(draft.onlinePublishing).Menu(func(menu *ui.Menu) {
-			for _, quality := range qualityLevels {
-				if menu.Item(T(quality.label)).Radio(draft.onlineQuality == quality.level).Chosen() {
-					a.stopSharePreview(draft)
-					draft.onlineQuality = quality.level
-					draft.onlineRevision++
-					a.requestShareRender()
-				}
-			}
+	}
+	button.Background(button.AnimateColor("fill", fill, ui.Animation{Duration: 120 * time.Millisecond}))
+}
+
+func (a *app) shareField(c *ui.Context, title, value string, disabled bool, checked *bool) ui.Element {
+	palette := a.pal
+	button := ui.ButtonBase(c).Grow(1).Basis(0).MinWidth(0).Height(46).PaddingX(10).Gap(6).
+		Radius(8).Label(title).Description(value).Disabled(disabled).FocusRingColor(palette.accent)
+	shareButtonFace(button, ui.Transparent, palette.hover, palette.press)
+	button.Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
+			ui.Text(c, title).FontSize(11).TextColor(palette.muted).SingleLine()
+			ui.Text(c, value).FontSize(13).FontWeight(600).TextColor(palette.text).SingleLine()
 		})
-		label := cardTemplates[0].label
-		for _, template := range cardTemplates {
-			if template.id == a.settings.CardTemplate {
-				label = template.label
-			}
+		if checked == nil {
+			ui.Icon(c, iconDown).Size(14, 14).Shrink(0).TextColor(palette.muted)
+			return
 		}
-		ui.Button(c.Key("card-template"), T(label)).Label(T("Card Template")).Disabled(draft.onlinePublishing).Menu(func(menu *ui.Menu) {
-			for _, template := range cardTemplates {
-				if menu.Item(T(template.label)).Radio(a.settings.CardTemplate == template.id).Chosen() {
-					a.settings.CardTemplate = template.id
-					draft.onlineRevision++
-					a.saveLyricChoices()
-				}
-			}
-		})
-		size := T("Portrait (3:4)")
-		if a.settings.CardSquare {
-			size = T("Square (1:1)")
+		on := *checked
+		fill, align := palette.press, ui.Start
+		if on {
+			fill, align = palette.accent, ui.End
 		}
-		ui.Button(c.Key("card-size"), size).Label(T("Card Size")).Disabled(draft.onlinePublishing).Menu(func(menu *ui.Menu) {
-			if menu.Item(T("Portrait (3:4)")).Radio(!a.settings.CardSquare).Chosen() {
-				a.settings.CardSquare = false
-				draft.onlineRevision++
-				a.saveLyricChoices()
-			}
-			if menu.Item(T("Square (1:1)")).Radio(a.settings.CardSquare).Chosen() {
-				a.settings.CardSquare = true
-				draft.onlineRevision++
-				a.saveLyricChoices()
-			}
-		})
-		// 开关也控制未选中的歌词列表，因此按整首歌判断是否有译文。
-		available := hasTranslation(draft.lines)
-		toggleTranslation := func() {
-			a.settings.HideCardTranslation = !a.settings.HideCardTranslation
-			draft.onlineRevision++
-			a.saveLyricChoices()
-		}
-		translationLabel := "Translation On"
-		if a.settings.HideCardTranslation {
-			translationLabel = "Translation Off"
-		}
-		translation := ui.Button(c.Key("card-translation"), T(translationLabel)).Label(T("Show Translation")).Disabled(!available || draft.onlinePublishing)
-		if !a.settings.HideCardTranslation {
-			translation.Background(a.pal.accent.Alpha(0.14))
-		}
-		if !available {
-			translation.Tooltip(T("No translation available"))
-		}
-		if translation.Clicked() {
-			toggleTranslation()
-		}
-		ui.Button(c.Key("card-language"), T("Lyrics Display")).Disabled(draft.onlinePublishing).Menu(func(menu *ui.Menu) {
-			if menu.Item(T("Show Translation")).Checked(!a.settings.HideCardTranslation).Disabled(!available).Chosen() {
-				toggleTranslation()
-			}
-			menu.Separator()
-			script := a.settings.LyricsScript
-			original := a.settings.ChineseLyrics[a.lyricKey(&draft.track)]
-			a.lyricScriptItems(menu, &draft.track)
-			if script != a.settings.LyricsScript || original != a.settings.ChineseLyrics[a.lyricKey(&draft.track)] {
-				draft.onlineRevision++
-				a.requestShareRender()
-			}
-		})
+		ui.Row(c).Size(24, 14).Shrink(0).Padding(2).Justify(align).AlignItems(ui.Center).Radius(7).Background(fill).
+			Children(func() { ui.Box(c).Size(10, 10).Radius(5).Background(palette.onAccent) })
+	})
+	if checked != nil {
+		button.Role(ui.RoleSwitch).Checked(*checked)
+	}
+	return button
+}
+
+func (a *app) shareMenu(c *ui.Context, title, value string, disabled bool, build func(*ui.Menu)) ui.Element {
+	return a.shareField(c, title, value, disabled, nil).PopoverMenuButton(build, ui.PopoverMenuButtonOptions{
+		Panel: func(panel ui.Element) { panel.Background(a.pal.bg).Border(1, a.pal.hairline).Radius(10) },
 	})
 }
 
-func (a *app) shareLinkControls(c *ui.Context, draft *shareDraft) {
+func (a *app) shareControls(c *ui.Context, draft *shareDraft) {
+	presentation := a.sharePresentation(draft)
+	disabled := draft.onlinePublishing || draft.exporting
+	ui.Column(c).Padding(4).Gap(3).Radius(12).Background(a.pal.hover).Children(func() {
+		if draft.aggregateView != nil && len(uniqueAggregateSources(draft.track.AggregateSources)) > 1 {
+			ui.Row(c).Padding(3, 10).Gap(12).AlignItems(ui.Center).Disabled(disabled).Children(func() {
+				ui.Text(c, T("Recording Source")).FontSize(11).TextColor(a.pal.muted)
+				a.shareRecordingSource(c, draft)
+			})
+		}
+		ui.Row(c).Gap(4).Children(func() {
+			a.shareAudioControls(c, draft, disabled)
+			a.shareLinkControls(c, draft, disabled)
+		})
+		ui.Box(c).Height(1).MarginX(8).Background(a.pal.hairline)
+		ui.Row(c).Gap(4).Children(func() { a.shareCardControls(c, draft, presentation, disabled) })
+	})
+}
+
+func (a *app) shareRecordingSource(c *ui.Context, draft *shareDraft) {
+	source := aggregateViewSource(c, draft.aggregateView, &draft.track)
+	if queued, err := aggregateQueueTracks([]music.Track{draft.track}, draft.aggregateView.sourceChoices); err != nil {
+		draft.status = err.Error()
+	} else if queued[0].ID != draft.track.ID {
+		if draft.pendingAggregateTrackID != queued[0].ID {
+			draft.pendingAggregateTrackID = queued[0].ID
+			selectedTrack, selectedSource := queued[0], source
+			a.post(func() {
+				if a.sharing != draft || !draft.open {
+					return
+				}
+				draft.track = selectedTrack
+				a.stopSharePreview(draft)
+				draft.clipStart, draft.clipEnd, draft.clipHead = 0, 0, 0
+				draft.recordingSource = &selectedSource
+				draft.pendingAggregateTrackID = ""
+				draft.lines = nil
+				draft.selected = make(map[int]bool)
+				draft.hasSelectionAnchor = false
+				draft.timingReliable = false
+				draft.display = lyricDisplayCache{}
+				draft.onlineRevision++
+				a.loadShareLyrics(draft)
+				a.requestShareRender()
+			})
+		}
+	} else {
+		draft.recordingSource = &source
+	}
+}
+
+func (a *app) shareAudioControls(c *ui.Context, draft *shareDraft, disabled bool) {
+	_, _, clipAvailable := shareClipRange(draft.lines, draft.selected, draft.track.Length(), draft.timingReliable)
+	modeLabel := T("Full Song")
+	if draft.onlineMode == "clip" {
+		modeLabel = T("Selected Clip")
+	}
+	mode := a.shareMenu(c.Key("online-mode"), T("Listen Mode"), modeLabel, disabled, func(menu *ui.Menu) {
+		if menu.Item(T("Full Song")).Radio(draft.onlineMode == "full").Chosen() {
+			a.stopSharePreview(draft)
+			draft.onlineMode = "full"
+			draft.onlineError = nil
+			draft.onlineRevision++
+			a.requestShareRender()
+		}
+		if menu.Item(T("Selected Clip")).Radio(draft.onlineMode == "clip").
+			Disabled(!clipAvailable || draft.onlinePublishing).Chosen() {
+			draft.onlineMode = "clip"
+			draft.onlineError = nil
+			draft.onlineRevision++
+			a.requestShareRender()
+		}
+	})
+	if !clipAvailable {
+		mode.Tooltip(T("Clip mode requires selected lyrics with reliable timing"))
+	}
+	qualityLabel := qualityLevels[1].label
+	for _, quality := range qualityLevels {
+		if quality.level == draft.onlineQuality {
+			qualityLabel = quality.label
+		}
+	}
+	a.shareMenu(c.Key("online-quality"), T("Audio Quality"), T(qualityLabel), disabled, func(menu *ui.Menu) {
+		for _, quality := range qualityLevels {
+			if menu.Item(T(quality.label)).Radio(draft.onlineQuality == quality.level).Chosen() {
+				a.stopSharePreview(draft)
+				draft.onlineQuality = quality.level
+				draft.onlineRevision++
+				a.requestShareRender()
+			}
+		}
+	})
+}
+
+func (a *app) shareCardControls(c *ui.Context, draft *shareDraft, presentation *sharePresentation, disabled bool) {
+	label := cardTemplates[0].label
+	for _, template := range cardTemplates {
+		if template.id == presentation.template {
+			label = template.label
+		}
+	}
+	a.shareMenu(c.Key("card-template"), T("Card Template"), T(label), disabled, func(menu *ui.Menu) {
+		for _, template := range cardTemplates {
+			if menu.Item(T(template.label)).Radio(presentation.template == template.id).Chosen() {
+				presentation.template = template.id
+				a.settings.CardTemplate = template.id
+				draft.onlineRevision++
+				a.saveLyricChoices()
+			}
+		}
+	})
+	size := T("Portrait (3:4)")
+	if presentation.square {
+		size = T("Square (1:1)")
+	}
+	a.shareMenu(c.Key("card-size"), T("Card Size"), size, disabled, func(menu *ui.Menu) {
+		if menu.Item(T("Portrait (3:4)")).Radio(!presentation.square).Chosen() {
+			presentation.square = false
+			a.settings.CardSquare = false
+			draft.onlineRevision++
+			a.saveLyricChoices()
+		}
+		if menu.Item(T("Square (1:1)")).Radio(presentation.square).Chosen() {
+			presentation.square = true
+			a.settings.CardSquare = true
+			draft.onlineRevision++
+			a.saveLyricChoices()
+		}
+	})
+	// 开关也控制未选中的歌词列表，因此按整首歌判断是否有译文。
+	available := hasTranslation(draft.lines)
+	toggleTranslation := func() {
+		presentation.hideTranslation = !presentation.hideTranslation
+		a.settings.HideCardTranslation = presentation.hideTranslation
+		draft.onlineRevision++
+		a.saveLyricChoices()
+	}
+	showTranslation := available && !presentation.hideTranslation
+	translationLabel := T("Off")
+	if showTranslation {
+		translationLabel = T("On")
+	}
+	if !available {
+		translationLabel = T("No translation available")
+	}
+	translation := a.shareField(c.Key("card-translation"), T("Translation"), translationLabel, !available || disabled, &showTranslation).
+		Label(T("Show Translation"))
+	if !available {
+		translation.Tooltip(T("No translation available"))
+	}
+	if translation.Clicked() {
+		toggleTranslation()
+	}
+	scriptLabel := T("Follow Interface")
+	for _, option := range lyricScripts {
+		if a.settings.LyricsScript == option.id {
+			scriptLabel = T(option.label)
+		}
+	}
+	a.shareMenu(c.Key("card-language"), T("Lyrics Display"), scriptLabel, disabled, func(menu *ui.Menu) {
+		if menu.Item(T("Show Translation")).Checked(!presentation.hideTranslation).Disabled(!available).Chosen() {
+			toggleTranslation()
+		}
+		menu.Separator()
+		script := a.settings.LyricsScript
+		original := a.settings.ChineseLyrics[a.lyricKey(&draft.track)]
+		a.lyricScriptItems(menu, &draft.track)
+		if script != a.settings.LyricsScript || original != a.settings.ChineseLyrics[a.lyricKey(&draft.track)] {
+			presentation.lyrics = a.lyricOptions(&draft.track, presentation.hideTranslation)
+			draft.onlineRevision++
+			a.requestShareRender()
+		}
+	})
+}
+
+func (a *app) shareLinkControls(c *ui.Context, draft *shareDraft, disabled bool) {
 	label := "Original Song Page"
 	hint := "QR code links to the original song page"
 	if draft.cardOnline {
@@ -419,19 +524,28 @@ func (a *app) shareLinkControls(c *ui.Context, draft *shareDraft) {
 			hint = "QR code uses the online listening link"
 		}
 	}
-	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Button(c.Key("card-link-target"), T("Card Link")+": "+T(label)).Label(T("Card Link")).
-			Disabled(draft.onlinePublishing || draft.exporting || draft.pendingOutput != shareOutputNone).
-			Menu(func(menu *ui.Menu) {
-				if menu.Item(T("Online Listening Link")).Radio(draft.cardOnline).Chosen() && !draft.cardOnline {
-					draft.cardOnline = true
-					a.requestShareRender()
-				}
-				if menu.Item(T("Original Song Page")).Radio(!draft.cardOnline).Chosen() && draft.cardOnline {
-					draft.cardOnline = false
-					a.requestShareRender()
-				}
-			})
-		ui.Text(c, T(hint)).FontSize(11.5).TextColor(a.pal.muted).Shrink(1).MinWidth(0)
+	a.shareMenu(c.Key("card-link-target"), T("Card Link"), T(label), disabled, func(menu *ui.Menu) {
+		if menu.Item(T("Online Listening Link")).Radio(draft.cardOnline).Chosen() && !draft.cardOnline {
+			draft.cardOnline = true
+			a.requestShareRender()
+		}
+		if menu.Item(T("Original Song Page")).Radio(!draft.cardOnline).Chosen() && draft.cardOnline {
+			draft.cardOnline = false
+			a.requestShareRender()
+		}
+	}).Tooltip(T(hint))
+	viewLabel := "Lyrics"
+	if draft.onlineDefaultView == "stage" {
+		viewLabel = "Stage"
+	}
+	a.shareMenu(c.Key("share-default-view"), T("Default View"), T(viewLabel), disabled, func(menu *ui.Menu) {
+		for _, option := range []struct{ value, label string }{{"", "Lyrics"}, {"stage", "Stage"}} {
+			if menu.Item(T(option.label)).Radio(draft.onlineDefaultView == option.value).Chosen() && draft.onlineDefaultView != option.value {
+				draft.onlineDefaultView = option.value
+				// 打开视图属于分享快照，切换后不能复用旧链接的二维码。
+				draft.onlineRevision++
+				a.requestShareRender()
+			}
+		}
 	})
 }

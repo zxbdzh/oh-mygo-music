@@ -203,16 +203,27 @@ func TestShareClientRejectsAnUnsafeServerOrigin(t *testing.T) {
 	}
 }
 
+// 公网撤销须通过同源校验，否则分享仍保留在列表里。
 func TestShareClientListsAndRevokesShares(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	revoked := false
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer service-secret" {
 			t.Error("request did not carry the configured service token")
 		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/shares":
 			w.Header().Set("Content-Type", "application/json")
+			if revoked {
+				_, _ = io.WriteString(w, `{"shares":[{"id":"share-1","status":"revoked"}]}`)
+				return
+			}
 			_, _ = w.Write([]byte(`{"shares":[{"id":"share-1","title":"Blue Hour","status":"ready","url":"https://share.example/s/token"}]}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/shares/share-1":
+			if r.Header.Get("Origin") != "https://"+r.Host {
+				http.Error(w, "Cross-site DELETE form submissions are forbidden", http.StatusForbidden)
+				return
+			}
+			revoked = true
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.NotFound(w, r)
@@ -233,6 +244,10 @@ func TestShareClientListsAndRevokesShares(t *testing.T) {
 	}
 	if err := client.revoke(context.Background(), "share-1"); err != nil {
 		t.Fatal(err)
+	}
+	shares, err = client.list(context.Background())
+	if err != nil || len(shares) != 1 || shares[0].Status != "revoked" || shares[0].URL != "" {
+		t.Fatalf("revoked share remained available: %+v, %v", shares, err)
 	}
 }
 
