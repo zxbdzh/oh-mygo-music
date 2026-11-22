@@ -49,17 +49,17 @@ const signInSettle = 250 * time.Millisecond
 
 // loadAccount asks a source who is signed in.
 func (a *app) loadAccount(lib *library) {
-	if !lib.can("account") || lib.accountBusy {
+	if !lib.can("account") || lib.accountBusy || a.libOf(lib.id) != lib {
 		return
 	}
 	lib.accountBusy = true
-	epoch := lib.likeEpoch
+	epoch := lib.pageEpoch
 	go func() {
 		acc, err := lib.src.Account()
 		a.post(func() {
 			lib.accountBusy = false
 			// 设置变更会换代个人缓存；旧查询只结束等待，再为当前平台重新确认身份。
-			if epoch != lib.likeEpoch {
+			if epoch != lib.pageEpoch {
 				a.loadAccount(lib)
 				return
 			}
@@ -89,6 +89,7 @@ func (a *app) loadAccount(lib *library) {
 func (a *app) afterAccount(lib *library) {
 	lib.accountAsked = true
 	lib.forget()
+	lib.mine, lib.saved, lib.home, lib.recent = nil, nil, nil, nil
 	lib.needsSignIn, lib.askedSignIn = false, false
 	a.loadMine(lib)
 	a.loadHome(lib)

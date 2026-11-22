@@ -40,9 +40,13 @@ func (a *app) loadEpisodes(lib *library, id string) {
 	}
 	d.page.loading, d.page.err = true, ""
 	offset := len(d.episodes)
+	epoch := lib.pageEpoch
 	go func() {
 		page, err := answered(lib.src.Show(id, offset))
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) || lib.shows[id] != d {
+				return
+			}
 			d.page.loading = false
 			if err != nil {
 				d.page.err, d.thenPlay = a.problem(lib, err, T("Couldn't load this podcast")), false
@@ -289,9 +293,13 @@ func (a *app) loadSubscribed(lib *library) {
 		return
 	}
 	lib.subscribedBusy, lib.subscribedErr = true, ""
+	epoch := lib.pageEpoch
 	go func() {
 		shows, err := lib.src.Shows()
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) {
+				return
+			}
 			lib.subscribedBusy = false
 			if err != nil {
 				lib.subscribedErr = a.problem(lib, err, T("Couldn't load your podcasts"))

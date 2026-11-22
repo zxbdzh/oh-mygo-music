@@ -27,9 +27,13 @@ func (a *app) loadAlbum(lib *library, id string) {
 		return
 	}
 	d.loading, d.err = true, ""
+	epoch := lib.pageEpoch
 	go func() {
 		al, err := answered(lib.src.Album(id))
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) || lib.albums[id] != d {
+				return
+			}
 			d.loading = false
 			if err != nil {
 				d.err = a.problem(lib, err, T("Couldn't load this album"))
@@ -147,9 +151,13 @@ func (a *app) loadSavedAlbums(lib *library) {
 	}
 	lib.savedAlbumsPaged.loading, lib.savedAlbumsPaged.err = true, ""
 	offset := len(lib.savedAlbums)
+	epoch := lib.pageEpoch
 	go func() {
 		page, err := answered(lib.src.SavedAlbums(offset))
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) {
+				return
+			}
 			lib.savedAlbumsPaged.loading = false
 			if err != nil {
 				lib.savedAlbumsPaged.err = a.problem(lib, err, T("Couldn't load your albums"))

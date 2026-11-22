@@ -74,9 +74,13 @@ func (a *app) moreResults(lib *library, r route, d *searchData) {
 	}
 	d.page.loading, d.page.err = true, ""
 	offset := d.res.Len()
+	epoch := lib.pageEpoch
 	go func() {
 		res, err := answered(lib.src.Search(r.query, r.kind, offset))
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) || lib.searches[r] != d {
+				return
+			}
 			d.page.loading = false
 			if err != nil {
 				d.page.err = a.problem(lib, err, T("The search failed"))

@@ -299,6 +299,7 @@ func (a *app) makeSources() {
 // enabledChanged lists the plugins that are on. There's always one: with all of
 // them off in the settings, as by hand, it's the built-in one.
 func (a *app) enabledChanged() {
+	previous := a.libs
 	a.libs = nil
 	for _, lib := range a.allLibs {
 		if !slices.Contains(a.settings.DisabledPlugins, lib.id) {
@@ -307,6 +308,12 @@ func (a *app) enabledChanged() {
 	}
 	if len(a.libs) == 0 && len(a.allLibs) > 0 {
 		a.libs = a.allLibs[:1]
+	}
+	for _, lib := range previous {
+		if a.libOf(lib.id) != lib {
+			lib.forgetPages()
+			lib.started = false
+		}
 	}
 	if a.headers != nil {
 		var on []*plugin.Plugin

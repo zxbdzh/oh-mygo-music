@@ -463,6 +463,7 @@ const homeFresh = time.Hour
 func (a *app) loadHome(lib *library) {
 	lib.homeLoading, lib.homeErr = true, ""
 	at := time.Now()
+	epoch := lib.pageEpoch
 	go func() {
 		var home *music.Browse
 		var recent []music.Track
@@ -477,8 +478,14 @@ func (a *app) loadHome(lib *library) {
 			}
 		}
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) {
+				return
+			}
 			lib.homeLoading = false
-			lib.home, lib.recent = home, recent
+			// 临时失败不能抹掉可操作缓存；成功的空结果仍然可以清空旧内容。
+			if homeErr == nil && recentErr == nil || home != nil || len(recent) > 0 {
+				lib.home, lib.recent = home, recent
+			}
 			lib.homeAt = at
 			switch {
 			case homeErr != nil:
@@ -522,9 +529,14 @@ func (a *app) loadPlaylist(lib *library, id string, thenPlay bool) {
 	lib.loadingPl[id] = true
 	delete(lib.plErr, id)
 	at := time.Now()
+	epoch := lib.pageEpoch
 	go func() {
 		pl, err := answered(lib.src.Playlist(id))
 		a.post(func() {
+			// 账号或来源换代后，旧响应不能改写新缓存，也不能触发旧账号的登录提示。
+			if !a.libraryCurrent(lib, epoch) {
+				return
+			}
 			delete(lib.loadingPl, id)
 			if err != nil {
 				lib.plErr[id] = a.problem(lib, err, T("Couldn't load this playlist"))
@@ -545,9 +557,13 @@ func (a *app) freshenPlaylist(lib *library, id string) {
 	before := *was
 	lib.freshPl[id] = true
 	at := time.Now()
+	epoch := lib.pageEpoch
 	go func() {
 		pl, err := answered(lib.src.Playlist(id))
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) {
+				return
+			}
 			delete(lib.freshPl, id)
 			// Changed in the app meanwhile, its songs or name, or forgotten:
 			// what's there is newer than what was asked for.

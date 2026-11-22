@@ -117,9 +117,13 @@ func (a *app) loadMine(lib *library) {
 		return
 	}
 	lib.mineAt = time.Now()
+	epoch := lib.pageEpoch
 	go func() {
 		lists, err := lib.src.Playlists()
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) {
+				return
+			}
 			if err != nil {
 				a.problem(lib, err, T("Couldn't load your playlists"))
 				return

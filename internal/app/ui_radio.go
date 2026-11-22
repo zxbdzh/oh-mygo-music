@@ -121,9 +121,13 @@ func (a *app) loadStations(lib *library) {
 		return
 	}
 	lib.stationsBusy, lib.stationsErr = true, ""
+	epoch := lib.pageEpoch
 	go func() {
 		stations, err := lib.src.Stations()
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) {
+				return
+			}
 			lib.stationsBusy = false
 			if err != nil {
 				lib.stationsErr = a.problem(lib, err, T("Couldn't load the stations"))

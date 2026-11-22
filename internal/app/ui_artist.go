@@ -95,9 +95,13 @@ func (a *app) loadArtist(lib *library, id string) {
 		return
 	}
 	d.loading, d.err = true, ""
+	epoch := lib.pageEpoch
 	go func() {
 		ar, err := answered(lib.src.Artist(id))
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) || lib.artists[id] != d {
+				return
+			}
 			d.loading = false
 			if err != nil {
 				d.err = a.problem(lib, err, T("Couldn't load this artist"))

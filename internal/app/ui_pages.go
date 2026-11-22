@@ -379,9 +379,13 @@ func (a *app) loadLikedPage(lib *library) {
 	if offset == 0 {
 		lib.likedAt = time.Now()
 	}
+	epoch := lib.pageEpoch
 	go func() {
 		page, err := answered(lib.src.Liked(offset))
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) {
+				return
+			}
 			lib.likedPaged.loading = false
 			if err != nil {
 				lib.likedPaged.err = a.problem(lib, err, T("Couldn't load your liked songs"))
@@ -409,9 +413,13 @@ func (a *app) freshenLiked(lib *library) {
 	lib.likedFresh, lib.likedAt = true, time.Now()
 	was := lib.likedList
 	who := lib.listener()
+	epoch := lib.pageEpoch
 	go func() {
 		page, err := answered(lib.src.Liked(0))
 		a.post(func() {
+			if !a.libraryCurrent(lib, epoch) {
+				return
+			}
 			lib.likedFresh = false
 			// Liked or not in the app meanwhile, or more of it loaded, or
 			// forgotten: what's there is newer than what was asked for.
