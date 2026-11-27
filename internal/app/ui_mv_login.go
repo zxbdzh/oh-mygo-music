@@ -189,6 +189,7 @@ func (a *app) finishMVLogin(cookie string) {
 func (a *app) saveMVLogin(cookie string, account mv.Account) {
 	a.mvCredential = cookie
 	a.mvAccount = account.Name
+	a.mvFromPlugin = false
 	a.mvLogin.open = false
 	if err := credential.Set(mv.CookieTarget, cookie); err != nil {
 		a.toast = T("Signed in for this session only.")
@@ -203,6 +204,13 @@ func (a *app) signOutMV() {
 		a.mvLogin.cancel()
 	}
 	a.mvLogin = mvLoginState{}
+	if a.mvFromPlugin {
+		// 插件的数据不归 MV 管，只停止复用。
+		a.mvCredential, a.mvAccount, a.mvFromPlugin = "", "", false
+		a.closeMV()
+		a.toast = T("Stopped using the plugin's Bilibili sign-in.")
+		return
+	}
 	a.mvCredential, a.mvAccount = "", ""
 	err := credential.Remove(mv.CookieTarget)
 	a.closeMV()

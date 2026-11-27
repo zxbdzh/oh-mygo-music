@@ -191,6 +191,7 @@ type app struct {
 	mv           mvState
 	mvStore      *mv.Store
 	mvCredential string
+	mvFromPlugin bool // 复用了 B 站插件的登录，退出时不能删除插件数据
 	mvDialog     mvDialogState
 	mvLogin      mvLoginState
 	mvAccount    string
@@ -466,6 +467,9 @@ func Run() error {
 		// 登录 Cookie 只从系统凭据库读入内存；失败时按未登录继续。
 		if cookie, ok, _ := credential.Get(mv.CookieTarget); ok {
 			a.mvCredential = cookie
+		} else if cookie := mvPluginCookie(); cookie != "" {
+			// 没在 MV 里单独登录时，跟随已安装 B 站插件的登录态。
+			a.mvCredential, a.mvFromPlugin = cookie, true
 		}
 		if path, err := preferencesPath(); err == nil {
 			a.aiPrefs = newPreferenceStore(path)

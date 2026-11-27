@@ -732,7 +732,9 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 			}
 		})
 		account := T("Sign in to get higher quality MV streams.")
-		if a.mvCredential != "" {
+		if a.mvFromPlugin {
+			account = T("Using the Bilibili plugin's sign-in.")
+		} else if a.mvCredential != "" {
 			account = T("Signed in.")
 			if a.mvAccount != "" {
 				account = Tf("Signed in as %s", a.mvAccount)

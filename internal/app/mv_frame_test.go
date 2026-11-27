@@ -97,6 +97,21 @@ func TestMVAccountSettingsFrame(t *testing.T) {
 	saveFrame(t, dir, "mv-account-settings.png", tester.Image())
 }
 
+// 设置 MM_FRAMES 后保存复用 B 站插件登录时的账号行。
+func TestMVPluginAccountSettingsFrame(t *testing.T) {
+	dir := framesDir(t)
+	defer i18n.SetLanguage(i18n.English)
+	i18n.SetLanguage(i18n.Chinese)
+	a := newTestApp()
+	a.mvCredential, a.mvFromPlugin = "SESSDATA=synthetic", true
+	a.settingsPage = "playback"
+	a.settingsQuery = strings.ToLower(T("Bilibili Account"))
+	tester := ui.NewTester(a.settingsView, 900, 850)
+	tester.SetDark(true)
+	settled(tester)
+	saveFrame(t, dir, "mv-account-plugin.png", tester.Image())
+}
+
 // 设置 MM_FRAMES 后保存 MV 搜索面板，供目视核对候选与搜索框。
 func TestMVSearchFrame(t *testing.T) {
 	dir := framesDir(t)

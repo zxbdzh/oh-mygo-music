@@ -142,3 +142,24 @@ func TestMVAccountRowInSettings(t *testing.T) {
 		t.Fatalf("sign out left %q / %q", a.mvCredential, a.mvAccount)
 	}
 }
+
+// 复用插件登录时，退出只停止复用，不删除插件或 MV 自己的凭据。
+func TestMVSignOutKeepsPluginCookie(t *testing.T) {
+	previous := credential.System
+	store := &memoryCredentialStore{values: map[string]string{}}
+	credential.System = store
+	defer func() { credential.System = previous }()
+
+	a := newTestApp()
+	a.mvCredential, a.mvFromPlugin = "SESSDATA=plugin", true
+	a.signOutMV()
+	if a.mvCredential != "" || a.mvFromPlugin {
+		t.Fatalf("state %q / %v", a.mvCredential, a.mvFromPlugin)
+	}
+	if _, ok := store.values[mv.CookieTarget]; ok {
+		t.Fatal("MV removed a credential it did not set")
+	}
+	if a.toast != T("Stopped using the plugin's Bilibili sign-in.") {
+		t.Fatalf("toast %q", a.toast)
+	}
+}
