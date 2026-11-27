@@ -47,6 +47,11 @@ func TestAutoMatchNeedsTitleLengthAndLead(t *testing.T) {
 			good,
 			{VideoID: "rival", Title: "晴天 MV", Uploader: "周杰伦", Duration: length},
 		}, "晴天", length, ""},
+		// 两条都合格、只差在一条带 MV/现场标记时，绑那条更像画面的。
+		{"prefers the MV upload", []Candidate{
+			{VideoID: "book", Title: "晴天 手书", Duration: length},
+			{VideoID: "live", Title: "晴天 现场版", Duration: length},
+		}, "晴天", length, "live"},
 		{"no candidates", nil, "晴天", length, ""},
 		{"unknown length", []Candidate{{VideoID: "unknown", Title: "晴天 MV"}}, "晴天", length, ""},
 		{"unknown song length", []Candidate{good}, "晴天", 0, ""},

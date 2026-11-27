@@ -124,6 +124,75 @@ func TestMVAutoMatchOffDoesNotSearch(t *testing.T) {
 	a.openMV()
 }
 
+// 有把握的没找到时，用歌名再搜一次并直接绑第一条。
+func TestMVAutoMatchFallsBackToFirstResult(t *testing.T) {
+	a := newTestApp()
+	old, oldResolve := mvSearchCandidates, mvResolve
+	defer func() { mvSearchCandidates, mvResolve = old, oldResolve }()
+	var queries []string
+	mvSearchCandidates = func(_ context.Context, query, _ string) ([]mv.Candidate, error) {
+		queries = append(queries, query)
+		// 两条都不满足时长要求，严格门槛会拒绝，兜底才该接手。
+		return []mv.Candidate{
+			{VideoID: "FIRST", Title: "Emoji 手书", Duration: 90 * time.Second},
+			{VideoID: "SECOND", Title: "别的歌", Duration: 200 * time.Second},
+		}, nil
+	}
+	mvResolve = func(context.Context, string, mv.QualityOptions, string) (*mv.Resolved, error) {
+		return nil, errors.New("offline in tests")
+	}
+	store, err := mv.Open(t.TempDir() + "/mv.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.mvStore = store
+	tr := song("fallback-1", "Emoji", "GUMI")
+	tr.Source = "fake"
+	a.pl.Cue([]music.Track{tr})
+	ch := posts(a)
+	a.nowPlaying, a.npPane = true, paneMV
+	a.openMV()
+	runPost(t, ch)
+	binding, ok := store.Binding("fake", "fallback-1")
+	if !ok || binding.VideoID != "FIRST" || !binding.Auto {
+		t.Fatalf("binding %+v, %v: want the first result", binding, ok)
+	}
+	// 兜底那次只用歌名搜。
+	if len(queries) != 2 || queries[1] != "Emoji" {
+		t.Fatalf("queries %v, want the fallback to search the song name", queries)
+	}
+}
+
+// 两次都没搜到东西时，MV 页的按钮说明“没搜到”，而不是静悄悄什么都不发生。
+func TestMVAutoMatchSaysWhenNothingFound(t *testing.T) {
+	a := newTestApp()
+	old := mvSearchCandidates
+	defer func() { mvSearchCandidates = old }()
+	mvSearchCandidates = func(context.Context, string, string) ([]mv.Candidate, error) {
+		return nil, nil
+	}
+	store, err := mv.Open(t.TempDir() + "/mv.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.mvStore = store
+	tr := song("nothing-1", "Emoji", "GUMI")
+	tr.Source = "fake"
+	a.pl.Cue([]music.Track{tr})
+	ch := posts(a)
+	a.nowPlaying, a.npPane = true, paneMV
+	a.openMV()
+	runPost(t, ch)
+	if !a.mvAutoRefused(&tr) {
+		t.Fatal("the refusal wasn't recorded")
+	}
+	tester := ui.NewTester(a.view, 1180, 780)
+	settled(tester)
+	if _, ok := tester.Find(T("No MV found · Choose")); !ok {
+		t.Fatal("the MV page didn't say nothing was found")
+	}
+}
+
 // 自动结果不覆盖听众自己挑的那一条。
 func TestMVAutoMatchKeepsManualBinding(t *testing.T) {
 	a := newTestApp()

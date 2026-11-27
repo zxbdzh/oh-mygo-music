@@ -197,6 +197,8 @@ type app struct {
 	mvAccount         string
 	// mvAutoTried 记住哪些歌已经自动匹配过，失败也不每帧重搜。
 	mvAutoTried map[string]bool
+	// mvAutoNone 记住哪些歌自动匹配试过但没搜到，MV 页据此说明原因。
+	mvAutoNone map[string]bool
 
 	backgroundTasks     []*backgroundTask
 	nextBackgroundTask  uint64

@@ -78,38 +78,52 @@ func Rank(candidates []Candidate, query, artist string, trackDuration time.Durat
 // 自动匹配的门槛：宁可这首没有画面，也不放一条错的内容上去。
 const (
 	autoMatchDurationDiff = 0.05 // 与音频时长相差不超过 5%
-	autoMatchLead         = 0.15 // 领先第二名的分数差
+	autoMatchLead         = 0.05 // 领先同样合格的第二名多少
+	autoMatchMVBonus      = 0.10 // 标题带 MV/官方/现场 时的认定加成
 )
 
-// AutoMatch 判断排好序的第一条候选能不能不经听众确认直接绑定。
+// AutoMatch 判断能不能不经听众确认直接绑定一条 MV。
 //
-// 三条硬条件同时成立才算：标题里就有歌名、时长和音频相差不超过 5%、
-// 标题不带翻弹或纯音频一类的标记；再加一条明显领先第二名。
-// 少一条就当没找到，让听众自己在候选里挑——自动配错的画面比没有画面更难受。
+// 先在候选里筛出「标题里就有歌名、时长和音频相差不超过 5%、标题不带翻弹或
+// 纯音频标记」的那些，再从中挑最好的一条：标题带 MV／官方／现场标记的额外加分，
+// 因为它更可能是画面而不是别人配的图。合格候选不止一条时还要明显领先，
+// 两条差不多就都不绑，让听众自己看——自动配错的画面比没有画面更难受。
 //
-// ranked 必须是 Rank 的结果：领先程度用的是 Score 给的分数。
+// ranked 必须是 Rank 的结果：加成建立在 Score 给的分数上。
 func AutoMatch(ranked []Candidate, song string, trackDuration time.Duration) (Candidate, bool) {
-	if len(ranked) == 0 || song == "" {
+	wanted := normalize(song)
+	if wanted == "" || trackDuration <= 0 {
 		return Candidate{}, false
 	}
-	best := ranked[0]
-	title, wanted := normalize(best.Title), normalize(song)
-	// 只认标题，不把歌手并进硬条件：合唱、翻唱的署名写法太多，容易误伤。
-	if !strings.Contains(title, wanted) {
+	var best Candidate
+	var bestScore, runnerUp float64
+	found := false
+	for _, c := range ranked {
+		title := normalize(c.Title)
+		if !strings.Contains(title, wanted) || containsAny(title, nonMVMarkers) || c.Duration <= 0 {
+			continue
+		}
+		// 时长对不上就是不认识这条视频，宁可不绑。
+		if diff := absDuration(c.Duration - trackDuration); float64(diff)/float64(trackDuration) > autoMatchDurationDiff {
+			continue
+		}
+		score := c.Score
+		if containsAny(title, mvMarkers) {
+			score += autoMatchMVBonus
+		}
+		switch {
+		case !found || score > bestScore:
+			runnerUp = max(runnerUp, bestScore)
+			best, bestScore, found = c, score, true
+		case score > runnerUp:
+			runnerUp = score
+		}
+	}
+	if !found {
 		return Candidate{}, false
 	}
-	if containsAny(title, nonMVMarkers) {
-		return Candidate{}, false
-	}
-	// 时长对不上就是不认识这条视频，宁可不绑。
-	if trackDuration <= 0 || best.Duration <= 0 {
-		return Candidate{}, false
-	}
-	if diff := absDuration(best.Duration - trackDuration); float64(diff)/float64(trackDuration) > autoMatchDurationDiff {
-		return Candidate{}, false
-	}
-	// 两条差不多时谁都不绑，让听众自己看。
-	if len(ranked) > 1 && best.Score-ranked[1].Score < autoMatchLead {
+	// 只有一条合格就直接用；不止一条时要明显领先。
+	if runnerUp > 0 && bestScore-runnerUp < autoMatchLead {
 		return Candidate{}, false
 	}
 	return best, true

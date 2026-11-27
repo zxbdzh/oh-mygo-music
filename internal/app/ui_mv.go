@@ -45,6 +45,10 @@ func (a *app) mvButton(c *ui.Context, tr *music.Track) {
 		binding, bound = a.mvStore.Binding(tr.Source, tr.ID)
 	}
 	label := T("Choose MV")
+	// 自动匹配两次搜索都没拿到结果时，把原因写在按钮上，免得以为功能没生效。
+	if !bound && a.mvAutoRefused(tr) {
+		label = T("No MV found · Choose")
+	}
 	accessLabel := label
 	if bound {
 		label = T("Manage MV")

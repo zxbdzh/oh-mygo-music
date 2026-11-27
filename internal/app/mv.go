@@ -319,7 +319,7 @@ func (a *app) closeMV() {
 // autoMatchMV 在没有绑定时，后台为这首歌找一条 MV 并绑上。
 //
 // 只在 openMV 里调用，也就是 MV 页签真的会占用画面的时候：离开页签、关掉 MV
-// 背景或减少动效都不会联网。同一首歌只试一次，搜不到或不够确定就当没有 MV，
+// 背景或减少动效都不会联网。同一首歌只试一次，真的什么都搜不到就当没有 MV，
 // 退回封面和歌词，不打扰正在听歌的人。
 func (a *app) autoMatchMV(tr *music.Track) {
 	if !a.settings.MVAutoMatch || a.mvStore == nil || tr == nil {
@@ -340,20 +340,62 @@ func (a *app) autoMatchMV(tr *music.Track) {
 	track, epoch := *tr, a.mv.epoch
 	cookie := a.mvCookie()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
-		found, err := mvSearchCandidates(ctx, query, cookie)
-		if err != nil {
-			return
-		}
-		duration := time.Duration(track.Duration) * time.Millisecond
-		ranked := mv.Rank(found, track.Name, track.ArtistNames(), duration, 8)
-		pick, ok := mv.AutoMatch(ranked, track.Name, duration)
-		if !ok {
-			return
-		}
-		a.post(func() { a.autoMatched(epoch, track, pick) })
+		pick, ok := autoPickMV(ctx, track, cookie)
+		a.post(func() { a.autoMatchDone(epoch, key, track, pick, ok) })
 	}()
+}
+
+// autoPickMV 为没有绑定的歌挑一条 MV：先按「歌名 歌手」找有把握的，
+// 找不到就用歌名再搜一次、直接取第一条。
+//
+// 兜底取第一条是听众定的规则：这类歌常常只有手书、翻制或音频版上传，
+// 没有把握的严格门槛会让 MV 页一直空着；宁可先给一个画面，不好再换。
+func autoPickMV(ctx context.Context, track music.Track, cookie string) (mv.Candidate, bool) {
+	duration := time.Duration(track.Duration) * time.Millisecond
+	if found, err := mvSearchCandidates(ctx, strings.TrimSpace(track.Name+" "+track.ArtistNames()), cookie); err == nil {
+		ranked := mv.Rank(found, track.Name, track.ArtistNames(), duration, 8)
+		if pick, ok := mv.AutoMatch(ranked, track.Name, duration); ok {
+			return pick, true
+		}
+	}
+	// 兜底：只按歌名搜，取排在第一的那条。
+	found, err := mvSearchCandidates(ctx, strings.TrimSpace(track.Name), cookie)
+	if err != nil {
+		return mv.Candidate{}, false
+	}
+	ranked := mv.Rank(found, track.Name, track.ArtistNames(), duration, 8)
+	if len(ranked) == 0 {
+		return mv.Candidate{}, false
+	}
+	return ranked[0], true
+}
+
+// autoMatchDone 在主线程收尾：挑到了就写绑定，两条搜索都空就记下“没搜到”，
+// 让 MV 页把原因说出来，而不是让人以为功能没生效。
+func (a *app) autoMatchDone(epoch uint64, key string, tr music.Track, pick mv.Candidate, ok bool) {
+	// 期间切歌或离开 MV 页签了，这条结果已经过期。
+	if a.quitting || a.mv.epoch != epoch {
+		return
+	}
+	if !ok {
+		if a.mvAutoNone == nil {
+			a.mvAutoNone = map[string]bool{}
+		}
+		a.mvAutoNone[key] = true
+		return
+	}
+	a.autoMatched(epoch, tr, pick)
+}
+
+// mvAutoRefused 报告自动匹配试过但没有把握：MV 页据此说明原因。
+func (a *app) mvAutoRefused(tr *music.Track) bool {
+	if tr == nil || !a.settings.MVAutoMatch || a.mvStore == nil || !a.mvAutoNone[bindingKeyOf(tr)] {
+		return false
+	}
+	_, bound := a.mvStore.Binding(tr.Source, tr.ID)
+	return !bound
 }
 
 // autoMatched 在主线程写入自动匹配的绑定，下一帧的 openMV 会照它加载画面。
