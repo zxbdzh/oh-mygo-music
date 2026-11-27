@@ -9,9 +9,9 @@ import (
 
 // crossSearch 是“全部来源”的一次搜索：每个能搜的来源各占一组，互不等待。
 type crossSearch struct {
-	query  string
-	kind   music.SearchKind
-	epoch  uint64 // 本轮的世代，上一轮的迟到响应按它丢弃
+	query string
+	kind  music.SearchKind
+	epoch uint64 // 本轮的世代，上一轮的迟到响应按它丢弃
 	// filter 是按来源筛选时留下的源 ID，"" 表示全部显示；它只筛已加载的结果。
 	filter string
 	groups []*crossGroup
@@ -161,7 +161,7 @@ func (a *app) crossSourceChips(c *ui.Context, cs *crossSearch) {
 func (a *app) crossChip(c *ui.Context, cs *crossSearch, id, label string) {
 	p := a.pal
 	on := cs.filter == id
-	chip := ui.ButtonBase(c.Key("cross-filter:"+id)).Height(26).PaddingX(11).Radius(999).
+	chip := ui.ButtonBase(c.Key("cross-filter:" + id)).Height(26).PaddingX(11).Radius(999).
 		Center().FocusRing(false).Label(label)
 	if on {
 		chip.Background(p.accent.Alpha(0.14)).Border(1, p.accent.Alpha(0.5))

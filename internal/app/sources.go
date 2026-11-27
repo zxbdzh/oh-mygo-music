@@ -88,8 +88,8 @@ type library struct {
 	home        *music.Browse // the source's own Home
 	homeErr     string
 	homeLoading bool
-	homeAt      time.Time               // when what the home page shows was asked for
-	homePagers  map[int]*pagerState     // where Home's pagers rest, by section
+	homeAt      time.Time           // when what the home page shows was asked for
+	homePagers  map[int]*pagerState // where Home's pagers rest, by section
 
 	playlists map[string]*music.Playlist
 	loadingPl map[string]bool

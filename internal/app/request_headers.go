@@ -9,7 +9,9 @@ import (
 
 // headerPlugins are the plugins that are on, for the pictures loading off
 // the main thread to ask for their requestHeaders.
-type headerPlugins struct{ on atomic.Pointer[[]*plugin.Plugin] }
+type headerPlugins struct {
+	on atomic.Pointer[[]*plugin.Plugin]
+}
 
 // set takes the plugins that are on.
 func (h *headerPlugins) set(on []*plugin.Plugin) { h.on.Store(&on) }
@@ -28,4 +30,3 @@ func (h *headerPlugins) image(u *url.URL) map[string]string {
 	}
 	return nil
 }
-

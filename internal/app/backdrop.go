@@ -115,7 +115,7 @@ type backdropCache struct {
 	art    *artwork
 	tint   ui.Color
 	fog    bool
-	hasBmp bool      // 当前画布是否显示清晰封面，用于在封面就绪或开关变化后重绘。
+	hasBmp bool // 当前画布是否显示清晰封面，用于在封面就绪或开关变化后重绘。
 	soft   float32
 	shade  float32
 	at     time.Time // when it was painted

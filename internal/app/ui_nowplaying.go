@@ -558,6 +558,7 @@ func (a *app) mvBody(c *ui.Context, tr *music.Track, accent ui.Color, w, h float
 	a.npRise(reveal(npTabsRow(c, w), pointerIn), 0).Children(func() {
 		a.paneTabs(c)
 		a.mvButton(c, tr)
+		a.mvToolbar(c, tr)
 	})
 	// 歌词列居中，最大 620px；顶栏 72px，底部控制条 72px。
 	ui.Column(c).Absolute().Top(72).Left(max((w-620)/2, 24)).Width(min(w-48, 620)).
@@ -1104,4 +1105,22 @@ func (a *app) queuePane(c *ui.Context) {
 	}
 	a.queueRows(c, &a.queuePaneView, white)
 	a.queueAt = 0
+}
+
+func (a *app) mvToolbar(c *ui.Context, tr *music.Track) {
+	if pillButton(c.Key("mv-change"), nil, T("Change"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
+		a.openMVDialog(tr)
+	}
+	if pillButton(c.Key("mv-remove"), nil, T("Remove"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
+		a.ensureMVStore()
+		a.mvStore.DeleteBinding(tr.Source, tr.ID)
+		a.closeMV()
+	}
+}
+	if pillButton(c.Key("mv-off-"), nil, "-100ms", white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
+		a.mvStore.ChangeOffset(tr.Source, tr.ID, -100)
+	}
+	if pillButton(c.Key("mv-off+"), nil, "+100ms", white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
+		a.mvStore.ChangeOffset(tr.Source, tr.ID, 100)
+	}
 }

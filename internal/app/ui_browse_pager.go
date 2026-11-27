@@ -21,7 +21,7 @@ var pagerGlide = ui.Animation{Spring: ui.SpringOptions{Duration: 420 * time.Mill
 // pagerState is a pager's place, and the cards its pages hold beyond the first
 // batch, which is what the section came with.
 type pagerState struct {
-	cards   []any // music.Station, music.Playlist, or music.Link in batch order
+	cards   []any    // music.Station, music.Playlist, or music.Link in batch order
 	next    string   // the page of the next batch of cards, none at the end
 	loading bool     // the next batch is being asked for
 	err     string   // why the next batch didn't come

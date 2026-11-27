@@ -113,6 +113,25 @@ func (s *Store) DeleteBinding(source, trackID string) error {
 	return err
 }
 
+func (s *Store) ChangeOffset(source, trackID string, delta int) error {
+	
+s.mu.Lock()
+	
+defer s.mu.Unlock()
+	
+key := bindingKey(source, trackID)
+	
+b, ok := s.data.Bindings[key]
+	
+if !ok { return nil }
+	
+b.OffsetMs += delta
+	
+s.data.Bindings[key] = b
+	
+return s.saveLocked()
+}
+
 // Resolved 取一条仍然有效的解析结果；过期的当作没有，让调用方重新解析。
 func (s *Store) Resolved(videoID string) (Resolved, bool) {
 	s.mu.Lock()

@@ -16,15 +16,15 @@ const (
 )
 
 type backgroundTask struct {
-	id          uint64
-	key         string
-	title       string
-	summary     string
-	status      string
-	state       backgroundTaskState
-	hidden      bool
-	progress    *float64
-	waiting     bool // 排队仍可取消，但尚未占用传输资源。
+	id            uint64
+	key           string
+	title         string
+	summary       string
+	status        string
+	state         backgroundTaskState
+	hidden        bool
+	progress      *float64
+	waiting       bool // 排队仍可取消，但尚未占用传输资源。
 	cancelLabel   string
 	generation    uint64
 	removed       bool
