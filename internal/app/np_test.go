@@ -138,7 +138,7 @@ func TestCmdNumberChoosesTab(t *testing.T) {
 		keys  []int // from 1, 0 for the last tab
 		panes []int
 	}{
-		{song("1", "宝船"), []int{4, 2, 1}, []int{paneWall, paneStage, paneLyrics}},
+		{song("1", "宝船"), []int{5, 2, 1}, []int{paneWall, paneStage, paneLyrics}},
 		{music.Track{ID: "2", Name: "节目", ShowID: "9", Duration: 200000}, []int{0, 1}, []int{paneComments, paneShow}},
 	} {
 		a := newTestApp()

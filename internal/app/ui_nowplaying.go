@@ -278,11 +278,9 @@ func (a *app) nowPlayingView(c *ui.Context) {
 		if a.mvShown(c) {
 			a.openMV()
 			a.mvLayer(c, tr, w, h)
-		} else if c.Preferences().ReduceMotion || !a.settings.MVBackground {
-			// 减少动态效果或关掉 MV 时，不再让静音视频占用解码器。
-			if a.mv.player != nil || a.mv.proxy != nil || a.mv.key != "" {
-				a.closeMV()
-			}
+		} else if a.mv.player != nil || a.mv.proxy != nil || a.mv.key != "" {
+			// 离开 MV 页、减少动态效果或关掉 MV 时，不再让静音视频占用解码器。
+			a.closeMV()
 		}
 		// Its colors bloom out of the bar's cover as it opens.
 		bloom := ui.Box(c.Key("bloom")).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough()
@@ -341,10 +339,7 @@ func (a *app) mvLayer(c *ui.Context, tr *music.Track, w, h float32) {
 	if a.mv.player == nil && a.mv.frame == nil {
 		return
 	}
-	// 视频不在当前 pane 时同步循环也要跑，否则切回歌词页会有一次长漂移。
-	if a.mv.player != nil {
-		a.mvSync(c, tr)
-	}
+	a.mvSync(c, tr)
 	ui.Box(c.Key("mv-background")).Absolute().Top(0).Left(0).Right(0).Bottom(0).Children(func() {
 		if a.mv.player != nil {
 			ui.Video(c, a.mv.player).Fill().Fit(ui.Cover).Scale(1.15, 1.15)
@@ -390,14 +385,17 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 	if a.npPane == paneComments && !a.trackLib(tr).can("comments") {
 		a.npPane = paneQueue
 	}
+	if a.npPane == paneMV && (!a.settings.MVBackground || tr.ShowID != "") {
+		a.npPane = a.lyricsPaneChosen()
+	}
 	if a.npPane != paneQueue {
 		a.queueAt = -1
 	}
 	if a.npPane != paneWall {
 		a.wallState.track = ""
 	}
-	// MV 开启时不走普通双列：视频是主体，封面卡片与玻璃胶囊反而碍事。
-	if a.mvShown(c) && a.mv.hasBinding(tr) {
+	// MV 是独立页签：只有选中它时，视频才成为主体。
+	if a.npPane == paneMV {
 		a.mvBody(c, tr, accent, w, h, pointerIn)
 		return
 	}
@@ -417,7 +415,6 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 			// controls a slim bar at the foot.
 			a.npRise(reveal(npTabsRow(c, w), pointerIn), 0).Children(func() {
 				a.paneTabs(c)
-				a.mvButton(c, tr)
 				a.stageStyleButton(c)
 				a.stageLanguageButton(c)
 			})
@@ -441,7 +438,6 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 		padX := npSideX(w)
 		a.npRise(reveal(npTabsRow(c, w), pointerIn), 0).Children(func() {
 			a.paneTabs(c)
-			a.mvButton(c, tr)
 			if tr.ShowID == "" {
 				a.lyricDisplayButton(c, tr)
 			}
@@ -553,12 +549,15 @@ func (a *app) mvBody(c *ui.Context, tr *music.Track, accent ui.Color, w, h float
 	// 顶部保留关闭按钮，不另加标题行，让画面尽量干净。
 	a.npRise(ui.Row(c).Height(topBar(c)).Justify(ui.Center).AlignItems(ui.Center).DragWindow(), 0).Children(func() {
 		reveal(ui.Box(c.Key("close-reveal")), pointerIn).Children(func() {
-			a.mvButton(c, tr)
 			closeBtn := iconButton(c.Key("close"), iconDown, 18, white.Alpha(0.8), T("Close"))
 			if closeBtn.Clicked() {
 				a.nowPlaying = false
 			}
 		})
+	})
+	a.npRise(reveal(npTabsRow(c, w), pointerIn), 0).Children(func() {
+		a.paneTabs(c)
+		a.mvButton(c, tr)
 	})
 	// 歌词列居中，最大 620px；顶栏 72px，底部控制条 72px。
 	ui.Column(c).Absolute().Top(72).Left(max((w-620)/2, 24)).Width(min(w-48, 620)).
@@ -603,7 +602,7 @@ func (a *app) npZoomFusion(c *ui.Context, pane int, fn func()) {
 
 	// 画面型窗格（歌词、律动、照片墙）保留缩放与模糊；
 	// 列表型窗格只做短位移与淡入，不把长列表拉糊。
-	visual := func(p int) bool { return p == paneLyrics || p == paneStage || p == paneWall }
+	visual := func(p int) bool { return p == paneLyrics || p == paneStage || p == paneWall || p == paneMV }
 	anim := ui.Animation{Spring: ui.SpringOptions{Duration: 450 * time.Millisecond, Bounce: 0.1}}
 	enter := &ui.Motion{Scale: 0.95, Opacity: 0, Blur: 4}
 	exit := &ui.Motion{Scale: 1.05, Opacity: 0, Blur: 4}
@@ -672,6 +671,7 @@ const (
 	paneShow
 	paneCaptions
 	paneWall
+	paneMV
 )
 
 // npTab is a tab of Now Playing: its pane, and what it says.
@@ -692,7 +692,11 @@ func (a *app) npTabs() []npTab {
 		}
 		tabs = append(tabs, npTab{paneQueue, T("Up Next")})
 	} else {
-		tabs = []npTab{{paneLyrics, T("Lyrics")}, {paneStage, T("Stage")}, {paneQueue, T("Up Next")}, {paneWall, T("Wall")}}
+		tabs = []npTab{{paneLyrics, T("Lyrics")}, {paneStage, T("Stage")}}
+		if a.settings.MVBackground {
+			tabs = append(tabs, npTab{paneMV, T("MV")})
+		}
+		tabs = append(tabs, npTab{paneQueue, T("Up Next")}, npTab{paneWall, T("Wall")})
 	}
 	if tr != nil && a.trackLib(tr).can("comments") {
 		tabs = append(tabs, npTab{paneComments, T("Comments")})

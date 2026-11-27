@@ -5,6 +5,7 @@ var zhCN = map[string]string{
 	"MV Background":                           "MV 背景",
 	"MV":                                      "MV",
 	"Choose an MV for %s":                     "为 %s 选择 MV",
+	"Choose MV":                               "选择 MV",
 	"Song and artist":                         "歌名 歌手",
 	"No MV found.":                            "没有找到 MV。",
 	"Searching…":                              "正在搜索…",

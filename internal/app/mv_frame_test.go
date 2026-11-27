@@ -43,11 +43,12 @@ func TestMVBackgroundFrame(t *testing.T) {
 	a.pl.Seek(12 * time.Second)
 	track := tr
 	a.mv.key = bindingKeyOf(&track)
-	a.nowPlaying, a.npPane = true, paneLyrics
+	a.nowPlaying, a.npPane = true, paneMV
 
 	tester := ui.NewTester(a.view, 1180, 780)
 	tester.SetDark(true)
 	tester.Frame()
+	tester.Move(600, 400)
 	tester.Advance(12 * time.Second)
 	tester.Frame()
 	settled(tester)
@@ -106,6 +107,7 @@ func TestMVFailureFrame(t *testing.T) {
 	tester.SetDark(true)
 	settled(tester)
 	a.settings.MVBackground = true
+	a.npPane = paneMV
 	a.mv.key = bindingKeyOf(&tr)
 	a.mv.err = "synthetic failure"
 	tester.Frame()

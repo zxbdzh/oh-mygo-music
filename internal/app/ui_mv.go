@@ -37,7 +37,7 @@ func (a *app) mvButton(c *ui.Context, tr *music.Track) {
 	if tr == nil || tr.ShowID != "" {
 		return
 	}
-	if pillButton(c.Key("mv-open"), iconVideo, T("MV"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
+	if pillButton(c.Key("mv-open"), iconVideo, T("Choose MV"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
 		a.openMVDialog(tr)
 	}
 }

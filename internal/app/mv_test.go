@@ -19,7 +19,7 @@ func TestMVOpensForBoundTrackAndClosesOnTrackChange(t *testing.T) {
 		t.Skip("no current track in the test app")
 	}
 	a.mvStore = newTestMVStore(t, tr.Source, tr.ID)
-	a.nowPlaying, a.npPane = true, paneLyrics
+	a.nowPlaying, a.npPane = true, paneMV
 	a.openMV()
 	if a.mv.key != bindingKeyOf(tr) {
 		t.Fatalf("mv key %q, want %q", a.mv.key, bindingKeyOf(tr))
@@ -39,7 +39,7 @@ func TestMVSkipsUnboundTrack(t *testing.T) {
 	a := newTestApp()
 	a.settings.MVBackground = true
 	a.mvStore = newTestMVStore(t, "other", "other")
-	a.nowPlaying, a.npPane = true, paneLyrics
+	a.nowPlaying, a.npPane = true, paneMV
 	a.openMV()
 	if a.mv.loading || a.mv.key != "" {
 		t.Fatalf("mv started for an unbound track: %+v", a.mv)
@@ -136,7 +136,7 @@ func TestMVReducedMotionDoesNotLoadVideo(t *testing.T) {
 	tr.Source = "fake"
 	a.pl.Cue([]music.Track{tr})
 	a.mvStore = newTestMVStore(t, "fake", "t1")
-	a.nowPlaying, a.npPane = true, paneLyrics
+	a.nowPlaying, a.npPane = true, paneMV
 	tt := ui.NewTester(a.view, 1180, 780)
 	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
 	tt.Frame()
@@ -157,6 +157,7 @@ func TestMVFailureShowsFallbackStatus(t *testing.T) {
 	tt := ui.NewTester(a.view, 1180, 780)
 	settled(tt)
 	a.settings.MVBackground = true
+	a.npPane = paneMV
 	a.mv.key = bindingKeyOf(&tr)
 	a.mv.err = "synthetic failure"
 	label := a.mvFailureLabel(a.pl.Current())

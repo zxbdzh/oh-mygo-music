@@ -170,7 +170,7 @@ type app struct {
 	npHeld        bool    // whether the pointer presses on it, to pull it
 	npStill       bool    // whether it comes and goes in place, sliding or fading, rather than out of the bar's cover
 	npFrom        ui.Rect // the player bar's cover, which it grows out of
-	npPane        int     // paneLyrics, paneQueue, paneStage, paneComments or paneShow
+	npPane        int     // paneLyrics, paneQueue, paneStage, paneMV, paneComments or paneShow
 	npPrevPane    int     // 上一帧的窗格，用于歌词与律动舞台之间的切换动画
 	lyricScroll   ui.ScrollState
 	lyricGlide    lyricGlide

@@ -34,7 +34,7 @@ func (a *app) mvShown(c *ui.Context) bool {
 		return false
 	}
 	switch a.npPane {
-	case paneLyrics, paneStage:
+	case paneMV:
 		return true
 	default:
 		return false
