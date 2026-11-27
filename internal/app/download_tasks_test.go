@@ -906,7 +906,10 @@ func TestDownloadTaskStopsOnPermissionRevokeAndRetriesAfterRegrant(t *testing.T)
 	if a.downloads.active != nil {
 		t.Fatal("regranting permission auto-restarted download without manual retry")
 	}
-	clickDownloadUI(t, tt, "Retry download: Guarded song")
+	clickDownloadUI(t, tt, "More actions: Guarded song")
+	if err := tt.ChooseMenuItem("Retry"); err != nil {
+		t.Fatal(err)
+	}
 	until(t, ch, func() bool { return a.backgroundTasks[0].state == backgroundTaskSucceeded })
 	if data, err := os.ReadFile(path); err != nil || string(data) != "granted-audio" {
 		t.Fatalf("regrant retry saved %q, %v", data, err)

@@ -271,7 +271,7 @@ func TestSharePublishRetriesAfterPollingFailure(t *testing.T) {
 	if a.sharing.onlineError == nil || a.sharing.onlineID != "retry-share" {
 		t.Fatalf("failed poll lost retry state: %+v", a.sharing)
 	}
-	if err := tester.Click("Retry"); err != nil {
+	if err := tester.Click("Retry task: Retry"); err != nil {
 		t.Fatal(err)
 	}
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.onlineURL != "" })

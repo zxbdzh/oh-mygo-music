@@ -203,6 +203,8 @@ type app struct {
 	backgroundTasks     []*backgroundTask
 	nextBackgroundTask  uint64
 	backgroundTasksOpen bool
+	// 用户手动收起后，新的下载/分享任务不再自动撑开面板，只更新胶囊上的数量。
+	backgroundTasksPinned bool
 	downloads           downloadCenter
 	downloadPrompt      downloadPromptState
 	trackSelect         trackSelectState

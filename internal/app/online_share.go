@@ -93,7 +93,12 @@ func (a *app) publishOnlineShare(draft *shareDraft) {
 	draft.onlinePublishing, draft.onlineError, draft.status = true, nil, T("Checking existing shares…")
 	task := draft.backgroundTask
 	if task == nil || task.removed {
-		task = a.newBackgroundTask(T("Online Sharing"), draft.track.Name+" · "+draft.track.ArtistNames())
+		summary := T("Online Sharing")
+		if artists := draft.track.ArtistNames(); artists != "" {
+			summary += " · " + artists
+		}
+		task = a.newBackgroundTask(draft.track.Name, summary)
+		task.kind = backgroundTaskShare
 		draft.backgroundTask = task
 	}
 	task.open = func() { a.openBackgroundShare(draft) }

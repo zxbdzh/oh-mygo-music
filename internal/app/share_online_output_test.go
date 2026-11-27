@@ -43,9 +43,6 @@ func TestOnlineCardReusesShareAfterReopening(t *testing.T) {
 	}
 	until(t, posted, func() bool { tester.Frame(); return copied != "" })
 	first := copied
-	if err := tester.Click("Close Background Task"); err != nil {
-		t.Fatal(err)
-	}
 	a.openShare(track)
 	until(t, posted, func() bool { tester.Frame(); return a.sharing != nil && len(a.sharing.png) > 0 })
 	delete(a.library.caps, "stream")
@@ -91,7 +88,7 @@ func TestOnlineCardReplacesExpiredOrRevokedLink(t *testing.T) {
 	until(t, posted, func() bool { tester.Frame(); return copied != "" })
 	unavailable.Store(true)
 	copied = ""
-	if err := tester.Click("Open task: Online card · "); err != nil {
+	if err := tester.Click("Open task: Online card"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tester.Click("Copy Listen Link"); err != nil {
@@ -135,7 +132,7 @@ func TestOnlineCardReuseFailureRestoresControlsWithoutCopyingStaleLink(t *testin
 	first := copied
 	fail.Store(true)
 	copied = ""
-	if err := tester.Click("Open task: Online card · "); err != nil {
+	if err := tester.Click("Open task: Online card"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tester.Click("Copy Listen Link"); err != nil {
@@ -146,7 +143,7 @@ func TestOnlineCardReuseFailureRestoresControlsWithoutCopyingStaleLink(t *testin
 		t.Fatal("failed reuse copied a stale link or uploaded audio again")
 	}
 	fail.Store(false)
-	if err := tester.Click("Retry"); err != nil {
+	if err := tester.Click("Retry task: Online card"); err != nil {
 		t.Fatal(err)
 	}
 	awaitShareSucceeded(t, a, tester, posted)
@@ -171,9 +168,7 @@ func TestCopyShareCardPublishesAndEncodesListeningLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitShareSucceeded(t, a, tester, posted)
-	if err := tester.Click("Copy Image"); err != nil {
-		t.Fatal(err)
-	}
+	clickTaskMenu(t, tester, "Online card", T("Copy Image"))
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.status == "Image copied" })
 	data := wait(t, copied, "published card image")
 	if uploads.Load() != 1 {
@@ -202,13 +197,11 @@ func TestOnlineCardCopyRetriesAfterAudioFailure(t *testing.T) {
 	default:
 	}
 	fake(a).stream = stream
-	if err := tester.Click("Retry"); err != nil {
+	if err := tester.Click("Retry task: Online card"); err != nil {
 		t.Fatal(err)
 	}
 	awaitShareSucceeded(t, a, tester, posted)
-	if err := tester.Click("Copy Image"); err != nil {
-		t.Fatal(err)
-	}
+	clickTaskMenu(t, tester, "Online card", T("Copy Image"))
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.status == "Image copied" })
 	assertCardListeningQR(t, wait(t, copied, "retried card"), "https://share.example/s/listening-1")
 	if uploads.Load() != 1 {
@@ -262,9 +255,7 @@ func TestOnlineCardRunsInBackgroundUntilExplicitCopy(t *testing.T) {
 		t.Fatal("background completion wrote the clipboard")
 	default:
 	}
-	if err := tester.Click("Copy Image"); err != nil {
-		t.Fatal(err)
-	}
+	clickTaskMenu(t, tester, "Online card", T("Copy Image"))
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.status == "Image copied" })
 	wait(t, copied, "card after loading")
 	if uploads.Load() != 1 {
@@ -317,7 +308,7 @@ func TestOnlineCardLookupLeavesUnderlyingActionsAvailable(t *testing.T) {
 	if uploads.Load() != 0 {
 		t.Fatal("lookup failure started an export")
 	}
-	if err := tester.Click("Close Background Task"); err != nil {
+	if err := tester.Click("Remove"); err != nil {
 		t.Fatalf("failed lookup did not expose its task: %v", err)
 	}
 }
@@ -354,9 +345,7 @@ func TestCopyListenLinkAndSaveCardReusePublishedShare(t *testing.T) {
 	if link != "https://share.example/s/listening-1" {
 		t.Fatalf("copied link %q", link)
 	}
-	if err := tester.Click("Save PNG"); err != nil {
-		t.Fatal(err)
-	}
+	clickTaskMenu(t, tester, "Online card", T("Save PNG"))
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.status == "Image saved" })
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -402,12 +391,10 @@ func TestCardLinkTargetAndChangedSelectionKeepCorrectQRCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitShareSucceeded(t, a, tester, posted)
-	if err := tester.Click("Copy Image"); err != nil {
-		t.Fatal(err)
-	}
+	clickTaskMenu(t, tester, "Online card", T("Copy Image"))
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.status == "Image copied" })
 	assertCardListeningQR(t, wait(t, copied, "online card"), "https://share.example/s/listening-1")
-	if err := tester.Click("Open task: Online card · "); err != nil {
+	if err := tester.Click("Open task: Online card"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tester.Click("Audio Quality"); err != nil {
@@ -421,9 +408,7 @@ func TestCardLinkTargetAndChangedSelectionKeepCorrectQRCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitShareSucceeded(t, a, tester, posted)
-	if err := tester.Click("Copy Image"); err != nil {
-		t.Fatal(err)
-	}
+	clickTaskMenu(t, tester, "Online card", T("Copy Image"))
 	until(t, posted, func() bool { tester.Frame(); return a.sharing.status == "Image copied" })
 	assertCardListeningQR(t, wait(t, copied, "updated card"), "https://share.example/s/listening-2")
 	if uploads.Load() != 2 {
@@ -439,6 +424,17 @@ func awaitShareSucceeded(t *testing.T, a *app, tester *ui.Tester, posted chan fu
 		return !draft.onlinePublishing && len(draft.png) > 0 && draft.pngURL == draft.onlineURL && draft.onlineURL != ""
 	})
 	tester.Frame()
+}
+
+// clickTaskMenu 打开任务卡右侧的“…”菜单，再选一个次级动作。
+func clickTaskMenu(t *testing.T, tester *ui.Tester, title, action string) {
+	t.Helper()
+	if err := tester.Click("More actions: " + title); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.ChooseMenuItem(action); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func awaitShareFailed(t *testing.T, a *app, tester *ui.Tester, posted chan func()) {

@@ -58,17 +58,17 @@ func TestBackgroundTaskCollapsedStatus(t *testing.T) {
 		a.backgroundTasksLayer(context)
 	}, 800, 600)
 	tester.Frame()
-	if _, ok := tester.Find("In progress"); !ok {
+	if _, ok := tester.Find("In progress · Scan"); !ok {
 		t.Fatal("running task was not shown in the collapsed center")
 	}
 	running.update(running.generation, backgroundTaskFailed, "Failed")
 	tester.Frame()
-	if _, ok := tester.Find("Failed"); !ok {
+	if _, ok := tester.Find("Failed · Scan"); !ok {
 		t.Fatal("failure was not shown in the collapsed center")
 	}
 	running.state = backgroundTaskSucceeded
 	tester.Frame()
-	if _, ok := tester.Find("Completed"); !ok {
+	if _, ok := tester.Find("Completed · Scan"); !ok {
 		t.Fatal("completion was not shown in the collapsed center")
 	}
 	if err := tester.Click("Background Tasks (2)"); err != nil || !a.backgroundTasksOpen {
@@ -81,7 +81,7 @@ func TestBackgroundTaskCenterScrollsToOlderTask(t *testing.T) {
 	a := newTestApp()
 	opened := false
 	for index := range 8 {
-		task := a.newBackgroundTask("Scan", fmt.Sprintf("Library %d", index))
+		task := a.newBackgroundTask(fmt.Sprintf("Library %d", index), "Local music")
 		if index == 0 {
 			task.open = func() { opened = true }
 		}
@@ -110,11 +110,11 @@ func TestBackgroundTaskHooksHideReopenAndRemove(t *testing.T) {
 		a.backgroundTasksLayer(context)
 	}, 800, 600)
 	tester.Frame()
-	if err := tester.Click("Close Background Task"); err != nil {
+	if err := tester.Click("Background Tasks (1)"); err != nil {
 		t.Fatal(err)
 	}
 	if canceled != 0 {
-		t.Fatal("hiding a task canceled its work")
+		t.Fatal("collapsing the task center canceled its work")
 	}
 	if err := tester.Click("Background Tasks (1)"); err != nil {
 		t.Fatal(err)
@@ -204,7 +204,7 @@ func TestBackgroundSharesCompleteOutOfOrderWithFrozenCards(t *testing.T) {
 	if wait(t, started, "second share") != "second" {
 		t.Fatal("wrong second share")
 	}
-	if err := tester.Click("Close Background Task"); err != nil {
+	if err := tester.Click("Background Tasks (2)"); err != nil {
 		t.Fatal(err)
 	}
 	releaseSecond()
@@ -231,7 +231,7 @@ func TestBackgroundSharesCompleteOutOfOrderWithFrozenCards(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.settings.CardSquare = false
-	if err := tester.Click("Open task: Second · "); err != nil {
+	if err := tester.Click("Open task: Second"); err != nil {
 		t.Fatal(err)
 	}
 	if a.sharing == first || a.sharing.track.ID != "second" || !a.sharing.open {
@@ -381,7 +381,8 @@ func TestBackgroundTaskFrame(t *testing.T) {
 	a.pl.Cue(tracks)
 	a.pl.SetLyrics(lyrics.Build("[00:01]让风慢慢经过\n[00:08]这一刻，唱给你听\n[00:18]我们一起出发", ""))
 	a.pl.Hold(10 * time.Second)
-	task := a.newBackgroundTask(T("Online Sharing"), "北方的夜 · The Polar Lights")
+	task := a.newBackgroundTask("北方的夜", T("Online Sharing")+" · The Polar Lights")
+	task.kind = backgroundTaskShare
 	task.open = func() {}
 	task.state = backgroundTaskSucceeded
 	task.status = T("Online link ready")
@@ -428,12 +429,19 @@ func TestBackgroundTaskFrame(t *testing.T) {
 	saveFrame(t, dir, "background-task-collapsed-failed.png", tester.Image())
 	for index := range 4 {
 		extra := a.newBackgroundTask(T("Share Card"), fmt.Sprintf("分享任务 %d · The Polar Lights", index+3))
+		extra.kind = backgroundTaskShare
 		extra.update(extra.generation, backgroundTaskSucceeded, T("Online link ready"))
 		extra.open = func() {}
 	}
+	// 收起期间新增任务不会自己撑开，验收溢出布局前手动展开一次。
+	a.nowPlaying, a.npPane = false, paneStage
 	tester = ui.NewTester(a.view, 760, 640)
 	tester.SetDark(true)
 	tester.Advance(2 * time.Second)
+	tester.Frame()
+	if err := tester.Click(fmt.Sprintf("%s (%d)", T("Background Tasks"), len(a.backgroundTasks))); err != nil {
+		t.Fatal(err)
+	}
 	tester.Frame()
 	saveFrame(t, dir, "background-task-overflow.png", tester.Image())
 }

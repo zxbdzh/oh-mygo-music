@@ -345,7 +345,12 @@ func (a *app) addBatchDownload(track music.Track, lib *library, quality, dir, ac
 }
 
 func (a *app) attachDownload(d *downloadTask) {
-	d.card = a.newBackgroundTask(T("Download"), d.track.Name)
+	summary := T("Download")
+	if d.artists != "" {
+		summary += " · " + d.artists
+	}
+	d.card = a.newBackgroundTask(d.track.Name, summary)
+	d.card.kind = backgroundTaskDownload
 	d.card.retryLabel = Tf("Retry download: %s", d.track.Name)
 	d.card.open = func() { a.open(route{page: pageDownloads}) }
 	// 从后台任务层新建的下载若正在详情页展示，不展开右下角重复浮窗。
