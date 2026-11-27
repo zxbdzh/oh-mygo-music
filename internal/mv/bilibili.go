@@ -273,16 +273,19 @@ func (c *Client) playurl(ctx context.Context, videoID string, cid int, fnval, mi
 
 // chooseStream 是选流策略的纯函数，测试不联网也能覆盖两条路径。
 func chooseStream(data map[string]any, loggedIn bool, expires time.Time) (*Resolved, error) {
+	var resolved *Resolved
 	if loggedIn {
-		if resolved := dashAVC(data, expires); resolved != nil {
-			return resolved, nil
-		}
+		resolved = dashAVC(data, expires)
 	}
-	if resolved := progressive(data, expires); resolved != nil {
-		return resolved, nil
+	if resolved == nil {
+		resolved = progressive(data, expires)
 	}
 	// 未登录也可能只有 DASH；总比没有画面好。
-	if resolved := dashAVC(data, expires); resolved != nil {
+	if resolved == nil {
+		resolved = dashAVC(data, expires)
+	}
+	if resolved != nil {
+		resolved.Quality = int(numberOr(data["quality"]))
 		return resolved, nil
 	}
 	return nil, errors.New("mv: no H.264 video track")

@@ -88,6 +88,30 @@ func TestProxyRefreshesOnceOnForbidden(t *testing.T) {
 	}
 }
 
+// CDN 把 fMP4 标成 octet-stream 时仍要给播放器一个视频类型。
+func TestProxyNormalizesVideoContentType(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		io.WriteString(w, "data")
+	}))
+	defer upstream.Close()
+	proxy, err := NewProxy(func(context.Context) (*Resolved, error) {
+		return &Resolved{URL: upstream.URL, ExpiresAt: time.Now().Add(time.Hour)}, nil
+	}, func() string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	resp, err := http.Get(proxy.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get("Content-Type"); got != "video/mp4" {
+		t.Fatalf("content type %q", got)
+	}
+}
+
 func TestProxyRejectsUnknownPath(t *testing.T) {
 	proxy, err := NewProxy(func(context.Context) (*Resolved, error) {
 		return &Resolved{URL: "http://127.0.0.1:1", ExpiresAt: time.Now().Add(time.Hour)}, nil

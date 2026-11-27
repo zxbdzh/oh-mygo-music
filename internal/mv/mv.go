@@ -46,6 +46,7 @@ type Resolved struct {
 	Headers   map[string]string `json:"headers,omitempty"`
 	ExpiresAt time.Time         `json:"expiresAt"`
 	Height    int               `json:"height,omitempty"`
+	Quality   int               `json:"quality,omitempty"` // B 站 qn：64=720P，80=1080P
 	Codec     string            `json:"codec,omitempty"`
 	Kind      string            `json:"kind,omitempty"` // dash-avc1 或 progressive
 }

@@ -154,6 +154,10 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, stream *Resolved
 			w.Header().Set(h, v)
 		}
 	}
+	// 有些 B 站 CDN 对 fMP4 返回 application/octet-stream；播放器需要视频类型。
+	if ct := w.Header().Get("Content-Type"); ct == "" || ct == "application/octet-stream" {
+		w.Header().Set("Content-Type", "video/mp4")
+	}
 	w.WriteHeader(resp.StatusCode)
 	if r.Method == http.MethodHead {
 		return nil
