@@ -179,9 +179,6 @@ func (a *app) saveMVLogin(cookie string, account mv.Account) {
 		a.toast = Tf("Signed in as %s", account.Name)
 	}
 	a.closeMV()
-	if a.nowPlaying {
-		a.openMV()
-	}
 }
 
 func (a *app) signOutMV() {
@@ -192,9 +189,6 @@ func (a *app) signOutMV() {
 	a.mvCredential, a.mvAccount = "", ""
 	err := credential.Remove(mv.CookieTarget)
 	a.closeMV()
-	if a.nowPlaying {
-		a.openMV()
-	}
 	if err != nil {
 		a.toast = T("Signed out for this session; the saved login could not be removed.")
 	} else {

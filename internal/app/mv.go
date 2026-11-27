@@ -29,8 +29,8 @@ type mvState struct {
 
 // mvShown 决定当前视图要不要显示 MV 背景：
 // 普通歌词与舞台显示，墙、评论、队列、节目页都不显示。
-func (a *app) mvShown() bool {
-	if !a.settings.MVBackground || a.pl.Current() == nil {
+func (a *app) mvShown(c *ui.Context) bool {
+	if !a.settings.MVBackground || a.pl.Current() == nil || c.Preferences().ReduceMotion {
 		return false
 	}
 	switch a.npPane {
@@ -39,6 +39,14 @@ func (a *app) mvShown() bool {
 	default:
 		return false
 	}
+}
+
+// mvFailureLabel 是 MV 加载失败时角落提示的文案；只有当前这首仍保留失败状态时显示。
+func (a *app) mvFailureLabel(tr *music.Track) string {
+	if tr == nil || a.mv.key != bindingKeyOf(tr) || a.mv.err == "" {
+		return ""
+	}
+	return T("MV couldn't load · Choose another")
 }
 
 // hasBinding 只让已经解出画面的歌改成 MV 正文；加载中仍显示原播放页，
@@ -56,12 +64,12 @@ func (st *mvState) hasBinding(tr *music.Track) bool {
 // 大漂移直接跳，和 ECHO 的三档方案一致；首版固定「平衡」档。
 func (a *app) mvSync(c *ui.Context, tr *music.Track) {
 	st := &a.mv
-	if st.player == nil || !a.mvShown() {
+	if st.player == nil || !a.mvShown(c) {
 		return
 	}
 	p := st.player
 	if p.Err() != nil {
-		a.closeMV()
+		a.mvFailed(st.key, p.Err())
 		return
 	}
 	if !p.Ready() {
@@ -171,7 +179,7 @@ func (a *app) mvReady(key string, proxy *mv.Proxy) {
 	player, err := video.OpenURL(proxy.URL())
 	if err != nil {
 		proxy.Close()
-		a.mv.loading, a.mv.err = false, err.Error()
+		a.mvFailed(key, err)
 		return
 	}
 	player.SetMuted(true).SetLoop(true)
@@ -180,19 +188,28 @@ func (a *app) mvReady(key string, proxy *mv.Proxy) {
 }
 
 func (a *app) mvFailed(key string, err error) {
-	if a.mv.key == key {
-		a.mv.loading, a.mv.err = false, err.Error()
+	if a.mv.key != key {
+		return
 	}
+	a.releaseMV()
+	a.mv.loading, a.mv.err = false, err.Error()
 }
 
-// closeMV 释放播放器与代理。切歌、关闭视图、退出时调用。
-func (a *app) closeMV() {
+// releaseMV 只释放解码器与代理，保留失败状态或当前绑定键供界面提示。
+func (a *app) releaseMV() {
 	if a.mv.player != nil {
 		a.mv.player.Close()
+		a.mv.player = nil
 	}
 	if a.mv.proxy != nil {
 		a.mv.proxy.Close()
+		a.mv.proxy = nil
 	}
+}
+
+// closeMV 释放播放器与代理，并清空这首的失败状态。切歌、关闭视图、退出时调用。
+func (a *app) closeMV() {
+	a.releaseMV()
 	a.mv = mvState{}
 }
 

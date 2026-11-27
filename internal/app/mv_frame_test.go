@@ -91,3 +91,23 @@ func TestMVLoginFrame(t *testing.T) {
 	settled(tester)
 	saveFrame(t, dir, "mv-login.png", tester.Image())
 }
+
+// 设置 MM_FRAMES 后保存 MV 失败回退图，确认封面背景和角落提示都在。
+func TestMVFailureFrame(t *testing.T) {
+	dir := framesDir(t)
+	a := newTestApp()
+	tr := song("mv-failure", "晴天", "周杰伦")
+	tr.Source = "fake"
+	a.pl.Cue([]music.Track{tr})
+	a.mvStore = newTestMVStore(t, "fake", "mv-failure")
+	a.nowPlaying, a.npPane = true, paneLyrics
+	a.settings.MVBackground = false
+	tester := ui.NewTester(a.view, 1180, 780)
+	tester.SetDark(true)
+	settled(tester)
+	a.settings.MVBackground = true
+	a.mv.key = bindingKeyOf(&tr)
+	a.mv.err = "synthetic failure"
+	tester.Frame()
+	saveFrame(t, dir, "mv-failure.png", tester.Image())
+}

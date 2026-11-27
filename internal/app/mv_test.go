@@ -129,6 +129,52 @@ func TestMVButtonShowsForSongs(t *testing.T) {
 	}
 }
 
+// 减少动态效果时不请求 MV，普通封面继续显示。
+func TestMVReducedMotionDoesNotLoadVideo(t *testing.T) {
+	a := newTestApp()
+	tr := song("t1", "晴天", "周杰伦")
+	tr.Source = "fake"
+	a.pl.Cue([]music.Track{tr})
+	a.mvStore = newTestMVStore(t, "fake", "t1")
+	a.nowPlaying, a.npPane = true, paneLyrics
+	tt := ui.NewTester(a.view, 1180, 780)
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
+	tt.Frame()
+	if a.mv.loading || a.mv.key != "" {
+		t.Fatalf("video loaded under reduce motion: %+v", a.mv)
+	}
+}
+
+// 加载失败时保留绑定键并显示可点击的回退提示。
+func TestMVFailureShowsFallbackStatus(t *testing.T) {
+	a := newTestApp()
+	tr := song("t1", "晴天", "周杰伦")
+	tr.Source = "fake"
+	a.pl.Cue([]music.Track{tr})
+	a.mvStore = newTestMVStore(t, "fake", "t1")
+	a.nowPlaying, a.npPane = true, paneLyrics
+	a.settings.MVBackground = false
+	tt := ui.NewTester(a.view, 1180, 780)
+	settled(tt)
+	a.settings.MVBackground = true
+	a.mv.key = bindingKeyOf(&tr)
+	a.mv.err = "synthetic failure"
+	label := a.mvFailureLabel(a.pl.Current())
+	if label == "" {
+		t.Fatalf("failure state missing: key=%q current=%q err=%q", a.mv.key, bindingKeyOf(a.pl.Current()), a.mv.err)
+	}
+	tt.Frame()
+	if a.mv.err != "synthetic failure" {
+		t.Fatalf("failure state changed: err=%q key=%q current=%q", a.mv.err, a.mv.key, bindingKeyOf(a.pl.Current()))
+	}
+	if _, ok := tt.Find(label); !ok {
+		t.Fatal("no MV failure status")
+	}
+	if a.mv.key == "" {
+		t.Fatal("failure cleared the binding key")
+	}
+}
+
 func newTestMVStore(t *testing.T, source, trackID string) *mv.Store {
 	t.Helper()
 	store, err := mv.Open(t.TempDir() + "/mv.json")

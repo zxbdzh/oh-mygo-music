@@ -119,9 +119,6 @@ func (a *app) bindMV(c mv.Candidate) {
 	}
 	d.open = false
 	a.closeMV()
-	if a.nowPlaying {
-		a.openMV()
-	}
 }
 
 func (a *app) mvDialogView(c *ui.Context) {

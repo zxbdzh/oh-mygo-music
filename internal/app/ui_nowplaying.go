@@ -119,6 +119,9 @@ func (a *app) nowPlayingLayer(c *ui.Context, open, settled bool) {
 	// shows it from the next.
 	if t <= 0 && !open && was <= 0 || a.pl.Current() == nil {
 		// Closed: nothing to paint or click.
+		if a.mv.player != nil || a.mv.proxy != nil || a.mv.key != "" {
+			a.closeMV()
+		}
 		layer.Invisible()
 		a.queueAt, a.wallState.track = -1, ""
 		return
@@ -272,9 +275,14 @@ func (a *app) nowPlayingView(c *ui.Context) {
 	root.Children(func() {
 		// 在线 MV 背景：歌有绑定且当前视图该显示时，静音视频铺在最底层。
 		// 无绑定或关闭时保持原封面背景，不占解码器。
-		if a.mvShown() {
+		if a.mvShown(c) {
 			a.openMV()
 			a.mvLayer(c, tr, w, h)
+		} else if c.Preferences().ReduceMotion || !a.settings.MVBackground {
+			// 减少动态效果或关掉 MV 时，不再让静音视频占用解码器。
+			if a.mv.player != nil || a.mv.proxy != nil || a.mv.key != "" {
+				a.closeMV()
+			}
 		}
 		// Its colors bloom out of the bar's cover as it opens.
 		bloom := ui.Box(c.Key("bloom")).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough()
@@ -288,7 +296,7 @@ func (a *app) nowPlayingView(c *ui.Context) {
 			// 减少透明度时，模糊材质会填充系统主题底色，盖掉沉浸页的深色封面背景。
 			useMaterial := !c.Preferences().ReduceTransparency && a.npPane != paneWall
 			// MV 已经是背景了，封面背景不再画，免得把视频盖住。
-			if !a.mvShown() || !a.mv.hasBinding(tr) {
+			if !a.mvShown(c) || !a.mv.hasBinding(tr) {
 				a.backdrop(c, shown, tint, useMaterial)
 			}
 			style := a.settings.CoverBackdropStyle
@@ -305,7 +313,7 @@ func (a *app) nowPlayingView(c *ui.Context) {
 				if blur {
 					shade.Material(glass.Blur{Radius: radius * 0.65})
 				}
-			case blur && !(a.mvShown() && a.mv.hasBinding(tr)):
+			case blur && !(a.mvShown(c) && a.mv.hasBinding(tr)):
 				// blur.go 只读取 Mask.From/To 端点透明度；从窗口 26% 处向右侧歌词区渐进模糊，保留左侧清晰封面光影。
 				ui.Box(c.Key("np-pane-blur")).Absolute().Top(0).Left(w * 0.26).Right(0).Bottom(0).PassThrough().
 					Material(glass.Blur{Radius: radius, Mask: &ui.LinearGradient{From: ui.Transparent, To: ui.RGB(0, 0, 0), Angle: 90}})
@@ -314,6 +322,15 @@ func (a *app) nowPlayingView(c *ui.Context) {
 		// Over the backdrop, which is positioned too: positioned elements
 		// paint over those in the flow.
 		ui.Column(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Children(func() { a.nowPlayingBody(c, tr, art, accent, w, h, pointerIn) })
+		if a.mvShown(c) {
+			if label := a.mvFailureLabel(tr); label != "" {
+				ui.Row(c.Key("mv-failure")).Absolute().Right(24).Bottom(84).Height(36).Children(func() {
+					if pillButton(c.Key("mv-failure-open"), iconVideo, label, ui.RGBA(8, 11, 16, 0.72), white.Alpha(0.9)).Label(label).Clicked() {
+						a.openMVDialog(tr)
+					}
+				})
+			}
+		}
 	})
 }
 
@@ -380,7 +397,7 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 		a.wallState.track = ""
 	}
 	// MV 开启时不走普通双列：视频是主体，封面卡片与玻璃胶囊反而碍事。
-	if a.mvShown() && a.mv.hasBinding(tr) {
+	if a.mvShown(c) && a.mv.hasBinding(tr) {
 		a.mvBody(c, tr, accent, w, h, pointerIn)
 		return
 	}
@@ -891,7 +908,7 @@ func (a *app) lyricsPane(c *ui.Context, tr *music.Track, h float32) {
 		scroll.Invisible()
 	}
 	defer a.quietCard(c, dim, h*0.18)
-	a.timedLines(c, scroll, lines, pos, cur, lag, linesStyle{size: 30, weight: 800, lineHeight: 1.25, quiet: quiet, shadow: a.mvShown()}, nil)
+	a.timedLines(c, scroll, lines, pos, cur, lag, linesStyle{size: 30, weight: 800, lineHeight: 1.25, quiet: quiet, shadow: a.mvShown(c)}, nil)
 }
 
 // linesStyle is how timedLines sets its lines: the size, weight and

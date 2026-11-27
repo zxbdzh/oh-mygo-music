@@ -149,7 +149,7 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", PromptDownload: true, Appearance: "system", CoverBackdrop: true, CoverBackdropStyle: defaultCoverBackdropStyle(), Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, StageIntensity: "standard", CrossfadeEnabled: true, CrossfadeDurationMs: 5000, PlaybackFadeEnabled: true, PauseFadeOutMs: 180, PlayFadeInMs: 260}
+	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", PromptDownload: true, Appearance: "system", CoverBackdrop: true, CoverBackdropStyle: defaultCoverBackdropStyle(), Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, StageIntensity: "standard", CrossfadeEnabled: true, CrossfadeDurationMs: 5000, PlaybackFadeEnabled: true, PauseFadeOutMs: 180, PlayFadeInMs: 260, MVBackground: true}
 }
 
 type coverBackdropStyle struct {

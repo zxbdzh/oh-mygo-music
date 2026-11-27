@@ -610,6 +610,14 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 				a.changed()
 			}
 		})
+		row(T("MV Background"), T("Show a matched online MV behind the lyrics. No video loads when this is off or Reduce Motion is on."), func() {
+			if ui.Switch(c.Key("mv-background"), &s.MVBackground).Label(T("MV Background")).Changed() {
+				if !s.MVBackground {
+					a.closeMV()
+				}
+				a.changed()
+			}
+		})
 		row(T("Download Quality"), T("Default quality requested from plugins when downloading songs"), func() {
 			labels := make([]string, len(downloadQualityLevels))
 			at := 0
