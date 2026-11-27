@@ -128,6 +128,9 @@ type settings struct {
 	// rising and swelling with the bass: an experiment the listener turns
 	// on.
 	Fog bool `json:"fog"`
+	// MVBackground shows a song's online MV quietly behind the lyrics
+	// (在线 MV 背景)：默认开启，绑定过的歌才有画面。
+	MVBackground bool `json:"mvBackground"`
 	// AppIcon is where the app's icon shows on macOS (appIcons); elsewhere
 	// it is always in the notification area.
 	AppIcon string `json:"appIcon"`

@@ -270,6 +270,13 @@ func (a *app) nowPlayingView(c *ui.Context) {
 	// The pointer is over the view whenever it is in the window.
 	pointerIn := root.Hovered()
 	root.Children(func() {
+		// 在线 MV 背景：歌有绑定且当前视图该显示时，静音视频铺在最底层。
+		// 无绑定或关闭时保持原封面背景，不占解码器。
+		if a.mvShown() {
+			a.mvLayer(c, tr, w, h)
+		} else {
+			a.openMV()
+		}
 		// Its colors bloom out of the bar's cover as it opens.
 		bloom := ui.Box(c.Key("bloom")).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough()
 		if t := a.npT; t < 1 && !a.npStill {
@@ -281,7 +288,10 @@ func (a *app) nowPlayingView(c *ui.Context) {
 		bloom.Children(func() {
 			// 减少透明度时，模糊材质会填充系统主题底色，盖掉沉浸页的深色封面背景。
 			useMaterial := !c.Preferences().ReduceTransparency && a.npPane != paneWall
-			a.backdrop(c, shown, tint, useMaterial)
+			// MV 已经是背景了，封面背景不再画，免得把视频盖住。
+			if !a.mvShown() || !a.mv.hasBinding(tr) {
+				a.backdrop(c, shown, tint, useMaterial)
+			}
 			style := a.settings.CoverBackdropStyle
 			if a.settings.Fog {
 				style = defaultCoverBackdropStyle()
@@ -306,6 +316,41 @@ func (a *app) nowPlayingView(c *ui.Context) {
 		// paint over those in the flow.
 		ui.Column(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Children(func() { a.nowPlayingBody(c, tr, art, accent, w, h, pointerIn) })
 	})
+}
+
+// mvLayer 画 MV 背景与暗色遮罩，遮罩的形状照 ECHO：
+// 横向两边重、中间轻，纵向从上到下渐深，让歌词落在画面较暗的区域上。
+func (a *app) mvLayer(c *ui.Context, tr *music.Track, w, h float32) {
+	a.ensureMVStore()
+	if a.mv.player == nil && a.mv.frame == nil {
+		return
+	}
+	// 视频不在当前 pane 时同步循环也要跑，否则切回歌词页会有一次长漂移。
+	if a.mv.player != nil {
+		a.mvSync(c, tr)
+	}
+	ui.Box(c.Key("mv-background")).Absolute().Top(0).Left(0).Right(0).Bottom(0).Children(func() {
+		if a.mv.player != nil {
+			ui.Video(c, a.mv.player).Fill().Fit(ui.Cover).Scale(1.15, 1.15)
+			return
+		}
+		ui.Image(c, a.mv.frame).Fill().Fit(ui.Cover).Scale(1.15, 1.15)
+	})
+	// 遮罩画在视频上、正文下：0.42 只是暗色主题的下限，不是整体盖一层灰。
+	ui.Box(c.Key("mv-shade")).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().
+		Draw(func(p *ui.Painter, r ui.Rect) {
+			// ECHO 的横向遮罩是 0.72/0.42/0.62，但它在浏览器里是两层叠加后的
+			// 透明度合成。MyGo 里两层叠画会更重，直接按合成后的单层画。
+			p.FillGradient(r, ui.LinearGradient{Angle: 90, Stops: []ui.GradientStop{
+				{Color: ui.RGBA(8, 11, 16, 0.42), At: 0},
+				{Color: ui.RGBA(8, 11, 16, 0.18), At: 0.48},
+				{Color: ui.RGBA(8, 11, 16, 0.3), At: 1},
+			}}, 0)
+			p.FillGradient(r, ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
+				{Color: ui.RGBA(8, 11, 16, 0.12), At: 0},
+				{Color: ui.RGBA(8, 11, 16, 0.4), At: 1},
+			}}, 0)
+		})
 }
 
 func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accent ui.Color, w, h float32, pointerIn bool) {
@@ -334,6 +379,11 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 	}
 	if a.npPane != paneWall {
 		a.wallState.track = ""
+	}
+	// MV 开启时不走普通双列：视频是主体，封面卡片与玻璃胶囊反而碍事。
+	if a.mvShown() && a.mv.hasBinding(tr) {
+		a.mvBody(c, tr, accent, w, h, pointerIn)
+		return
 	}
 	{
 		// The top strip drags the window; the chevron closes the view,
@@ -477,6 +527,44 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 			})
 		})
 	}
+}
+
+// mvBody 是 MV 开启时的正文：歌词居中单列，底部一条纯色控制条。
+// 不用玻璃模糊：视频逐帧变化，实时模糊会糊成噪点且更费。
+func (a *app) mvBody(c *ui.Context, tr *music.Track, accent ui.Color, w, h float32, pointerIn bool) {
+	// 顶部保留关闭按钮，不另加标题行，让画面尽量干净。
+	a.npRise(ui.Row(c).Height(topBar(c)).Justify(ui.Center).AlignItems(ui.Center).DragWindow(), 0).Children(func() {
+		reveal(ui.Box(c.Key("close-reveal")), pointerIn).Children(func() {
+			closeBtn := iconButton(c.Key("close"), iconDown, 18, white.Alpha(0.8), T("Close"))
+			if closeBtn.Clicked() {
+				a.nowPlaying = false
+			}
+		})
+	})
+	// 歌词列居中，最大 620px；顶栏 72px，底部控制条 72px。
+	ui.Column(c).Absolute().Top(72).Left(max((w-620)/2, 24)).Width(min(w-48, 620)).
+		Bottom(72).Children(func() {
+		a.npZoomFusion(c, a.npPane, func() {
+			switch a.npPane {
+			case paneStage:
+				a.stage(c, tr, accent)
+			default:
+				a.lyricsPane(c, tr, h)
+			}
+		})
+	})
+	// 底部控制条：纯色暗调，歌名在左，播控在右，一条细白边分界。
+	ui.Row(c.Key("mv-bar")).Absolute().Left(0).Right(0).Bottom(0).Height(72).
+		Padding(0, 24).AlignItems(ui.Center).Gap(16).
+		Background(ui.RGBA(6, 8, 12, 0.5)).
+		Children(func() {
+			ui.Column(c).Gap(2).Children(func() {
+				ui.Text(c, tr.Name).FontSize(16).FontWeight(700).SingleLine()
+				ui.Text(c, tr.ArtistNames()).FontSize(12).TextColor(white.Alpha(0.6)).SingleLine()
+			})
+			ui.Spacer(c)
+			a.transport(c, white, white.Alpha(0.5), accent, 24)
+		})
 }
 
 // npZoomFusion 让窗格切换有个过渡：画面型窗格缩放加模糊，列表型窗格短位移淡入。
@@ -628,7 +716,7 @@ func (a *app) paneTabs(c *ui.Context) {
 		segW = max(segW, w+22)
 	}
 
-	track := ui.Row(c.Key("np-tabs-pill")).Width(segW*float32(len(tabs))+2*inset).Height(30).
+	track := ui.Row(c.Key("np-tabs-pill")).Width(segW*float32(len(tabs)) + 2*inset).Height(30).
 		Shrink(0).Gap(0).Padding(inset).Radius(15).
 		Background(ui.Hex("#ffffff").Alpha(0.1)).FocusRing(false)
 	if theme.Dark {
@@ -801,7 +889,7 @@ func (a *app) lyricsPane(c *ui.Context, tr *music.Track, h float32) {
 		scroll.Invisible()
 	}
 	defer a.quietCard(c, dim, h*0.18)
-	a.timedLines(c, scroll, lines, pos, cur, lag, linesStyle{size: 30, weight: 800, lineHeight: 1.25, quiet: quiet}, nil)
+	a.timedLines(c, scroll, lines, pos, cur, lag, linesStyle{size: 30, weight: 800, lineHeight: 1.25, quiet: quiet, shadow: a.mvShown()}, nil)
 }
 
 // linesStyle is how timedLines sets its lines: the size, weight and
@@ -811,6 +899,7 @@ type linesStyle struct {
 	weight     int
 	lineHeight float32
 	quiet      bool
+	shadow     bool
 }
 
 // timedLines fills scroll with lines that follow the track playing at
@@ -852,6 +941,10 @@ func (a *app) timedLines(c *ui.Context, scroll ui.Element, lines []lyrics.Line, 
 					// than building the view at the display's rate as it does.
 					text := ui.Column(c).AlignItems(ui.Start).Gap(6)
 					text.AnimatePose(ui.Pose{Fade: 1 - alpha}, ui.Animation{Duration: 380 * time.Millisecond})
+					if st.shadow {
+						// MV 画面明暗会变，歌词加一层轻阴影保证浅色帧上也读得清。
+						text.TextShadow(0, 1, 4, ui.RGBA(0, 0, 0, 0.65))
+					}
 					text.Children(func() {
 						if on && len(l.Words) > 0 {
 							// The line sung lights up word by word as it is sung.
@@ -866,10 +959,16 @@ func (a *app) timedLines(c *ui.Context, scroll ui.Element, lines []lyrics.Line, 
 								c.After(40 * time.Millisecond)
 							}
 						} else {
-							ui.Text(c, l.Text).Lang(lang).FontSize(st.size).FontWeight(st.weight).LineHeight(st.lineHeight).LetterSpacing(-0.4).TextColor(white)
+							lineText := ui.Text(c, l.Text).Lang(lang).FontSize(st.size).FontWeight(st.weight).LineHeight(st.lineHeight).LetterSpacing(-0.4).TextColor(white)
+							if st.shadow {
+								lineText.TextShadow(0, 1, 4, ui.RGBA(0, 0, 0, 0.65))
+							}
 						}
 						if l.Translation != "" {
-							ui.Text(c, l.Translation).FontSize(17).FontWeight(600).TextColor(white.Alpha(0.7))
+							trans := ui.Text(c, l.Translation).FontSize(17).FontWeight(600).TextColor(white.Alpha(0.7))
+							if st.shadow {
+								trans.TextShadow(0, 1, 3, ui.RGBA(0, 0, 0, 0.55))
+							}
 						}
 					})
 				})

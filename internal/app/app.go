@@ -17,6 +17,7 @@ import (
 	"mygo-music/internal/i18n"
 	"mygo-music/internal/local"
 	"mygo-music/internal/music"
+	"mygo-music/internal/mv"
 	"mygo-music/internal/player"
 	"mygo-music/internal/plugin"
 )
@@ -185,6 +186,10 @@ type app struct {
 	comments      commentState
 	tabCount      rollState // the count on the comments' tab, as it rolls
 
+	// mv 是在线 MV 背景：绑定、解析结果与正在播放的静音视频。
+	mv           mvState
+	mvStore      *mv.Store
+	mvCredential string
 
 	backgroundTasks     []*backgroundTask
 	nextBackgroundTask  uint64
