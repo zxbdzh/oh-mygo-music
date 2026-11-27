@@ -21,6 +21,14 @@ func TestLiveSearchResolveAndProxy(t *testing.T) {
 	defer cancel()
 
 	client := NewClient()
+	client.Cookie = NormalizeCookie(os.Getenv("MV_LIVE_COOKIE"))
+	if client.Cookie != "" {
+		account, err := client.Account(ctx)
+		if err != nil {
+			t.Fatalf("account: %v", err)
+		}
+		t.Logf("account: %s (%d)", account.Name, account.MID)
+	}
 	candidates, err := client.Search(ctx, "周杰伦 晴天")
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +43,7 @@ func TestLiveSearchResolveAndProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	parsed, _ := url.Parse(resolved.URL)
-	t.Logf("resolved: kind=%s height=%d host=%s", resolved.Kind, resolved.Height, parsed.Host)
+	t.Logf("resolved: kind=%s quality=%d height=%d host=%s", resolved.Kind, resolved.Quality, resolved.Height, parsed.Host)
 
 	proxy, err := NewProxy(func(context.Context) (*Resolved, error) { return resolved, nil }, func() string { return "" })
 	if err != nil {
@@ -58,4 +66,29 @@ func TestLiveSearchResolveAndProxy(t *testing.T) {
 		t.Fatalf("content type %q", resp.Header.Get("Content-Type"))
 	}
 	t.Logf("range ok, total %s", resp.Header.Get("Content-Range"))
+}
+
+// 扫码接口的真实形状会变；联网验收至少确认能生成二维码并轮询到等待状态。
+func TestLiveLoginQRCode(t *testing.T) {
+	if os.Getenv("MV_LIVE") != "1" {
+		t.Skip("set MV_LIVE=1 to run the live Bilibili check")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client := NewClient()
+	login, err := client.LoginQRCode(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if login.URL == "" || login.Key == "" {
+		t.Fatalf("incomplete qr: %+v", login)
+	}
+	result, err := client.PollLoginQRCode(ctx, login.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != QRWaiting && result.State != QRScanned && result.State != QRExpired {
+		t.Fatalf("unexpected state %d", result.State)
+	}
+	t.Logf("qr state %d", result.State)
 }
