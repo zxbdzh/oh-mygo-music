@@ -473,16 +473,33 @@ func TestAIFrames(t *testing.T) {
 	settled(foldedView)
 	saveFrame(t, dir, "ai-task-card.png", foldedView.Image())
 
-	// 手动入口失败：说明没猜出来，并提供直接重试。
+	// 手动入口失败：走真实的失败分支，拍下说明、搜索词和重试按钮。
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer failSrv.Close()
+	useFakeSearch(t, fakeSearchProvider{results: []websearch.Result{{Title: "夜曲 - 周杰伦", URL: "https://example.com/song"}}})
 	failed := newTestApp()
-	failed.aiSuggestion = aiSuggestionState{
-		open: true, failed: true, stage: aiBarDone,
-		track: song("1", "夜曲", "周杰伦"), lib: failed.library,
-		query: "夜曲 周杰伦",
-	}
+	failed.settings.AIEnabled = true
+	failed.settings.AIBaseURL = failSrv.URL
+	failed.settings.AIModel = "m"
+	failed.settings.AIWebProvider = "tavily"
+	failed.mine = []music.Playlist{{ID: "10", Name: "通勤", Mine: true}}
+	failed.playlists["42"] = &music.Playlist{ID: "42", Name: "List", Tracks: []music.Track{song("1", "夜曲", "周杰伦")}}
+	failed.route = route{page: pagePlaylist, src: "fake", id: "42"}
+	failedTrack := song("1", "夜曲", "周杰伦")
+	failedCh := posts(failed)
+	failed.openAISuggestion(&failedTrack)
+	until(t, failedCh, func() bool { return !failed.aiSuggestion.busy && failed.aiSuggestion.failed })
 	failedView := ui.NewTester(failed.view, 1200, 800)
 	settled(failedView)
 	saveFrame(t, dir, "ai-suggestion-failed.png", failedView.Image())
+	// 点重试后回到搜索阶段，说明重试确实重新发起了请求。
+	if err := failedView.Click(T("Retry")); err != nil {
+		t.Fatal(err)
+	}
+	failedView.Frame()
+	saveFrame(t, dir, "ai-suggestion-retrying.png", failedView.Image())
 
 	bar := newTestApp()
 	bar.aiBar = aiBarState{open: true, stage: aiBarDone, lib: bar.library,
