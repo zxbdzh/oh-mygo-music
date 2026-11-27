@@ -36,6 +36,13 @@ type aiSuggestionState struct {
 	lib    *library
 	pick   ai.Suggestion
 	name   string
+	// 手动入口也把联网进度、实际搜索词和来源留在弹窗里，折叠后由任务卡接管。
+	stage        aiBarStage
+	query        string
+	sources      []websearch.Result
+	evidenceOpen bool
+	task         *backgroundTask
+	cancel       context.CancelFunc
 }
 
 // aiBarStage is where the auto suggestion is: searching the web, asking the
@@ -63,6 +70,7 @@ type aiBarState struct {
 	stage        aiBarStage
 	sources      []websearch.Result
 	evidenceOpen bool
+	query        string
 }
 
 // aiRefineState is the conversation that talks a suggestion into another
@@ -79,9 +87,28 @@ type aiRefineState struct {
 	pick       ai.Suggestion
 	name       string
 	prefs      []string
-	// learned is what the listener said that led to the adopted pick, kept
-	// as a preference when they adopt it.
+	// learned is the listener's reason for changing the playlist.
 	learned string
+}
+
+// aiSearchQueryFor reports the query the app would search with, and whether
+// web search is part of this suggestion at all.
+func (a *app) aiSearchQueryFor(song ai.Song, learned bool) (string, bool) {
+	if learned || a.aiWebProvider() == nil {
+		return "", false
+	}
+	return aiSearchQuery(song), true
+}
+
+func aiStageStatus(stage aiBarStage) string {
+	switch stage {
+	case aiBarSearching:
+		return T("Searching the web…")
+	case aiBarThinking:
+		return T("Thinking…")
+	default:
+		return T("Completed")
+	}
 }
 
 // openAISuggestion asks the configured model which own playlist fits tr.
@@ -90,48 +117,158 @@ func (a *app) openAISuggestion(tr *music.Track) {
 	if lib == nil || !lib.can("addToPlaylist") {
 		return
 	}
-	// 联网上下文只在手动入口做；native 模式仍走服务商服务端联网。
-	cfg := a.aiConfig(a.settings.AIWebProvider == "native")
-	a.aiSuggestion = aiSuggestionState{open: true, busy: true, track: *tr, lib: lib}
+	prefs, learned := a.aiPreferenceTexts(lib, tr.ID)
+	// 已有这首歌的调整记录，模型直接复用曲目信息和调整原因。
+	cfg := a.aiConfig(a.settings.AIWebProvider == "native" && !learned)
+	song := ai.Song{Name: tr.Name, Artists: tr.ArtistNames(), Album: tr.Album.Name}
+	query, web := a.aiSearchQueryFor(song, learned)
+	stage := aiBarThinking
+	if web {
+		stage = aiBarSearching
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.aiSuggestion = aiSuggestionState{
+		open: true, busy: true, track: *tr, lib: lib,
+		stage: stage, query: query, cancel: cancel,
+	}
 	go func() {
-		song := ai.Song{Name: tr.Name, Artists: tr.ArtistNames(), Album: tr.Album.Name}
-		// 应用侧搜索一次拼进提示词；失败按无联网继续，不阻塞本地判断。
-		webCtx, cancelWeb := context.WithTimeout(context.Background(), 20*time.Second)
-		results := a.aiWebContext(webCtx, song)
-		cancelWeb()
+		defer cancel()
+		var results []websearch.Result
+		if web {
+			// 已有记录时不重复联网查同一首歌。
+			webCtx, cancelWeb := context.WithTimeout(ctx, 20*time.Second)
+			results = a.aiWebContext(webCtx, song)
+			cancelWeb()
+		}
+		if len(results) > 5 {
+			results = results[:5]
+		}
+		a.post(func() {
+			d := &a.aiSuggestion
+			if d.track.ID != tr.ID || (!d.open && d.task == nil) {
+				return
+			}
+			d.stage, d.sources = aiBarThinking, results
+			if d.task != nil && d.task.state == backgroundTaskRunning {
+				d.task.status = aiStageStatus(aiBarThinking)
+			}
+			a.redraw()
+		})
 		candidates := a.aiCandidates(lib, tr, 100)
 		if len(candidates) == 0 {
-			a.post(func() {
-				a.aiSuggestion.busy = false
-				a.aiSuggestion.failed = true
-			})
+			a.post(func() { a.finishAISuggestion(tr.ID, ai.Suggestion{}, "", false) })
 			return
 		}
 		// 联网的 reasoning 模型可能接近一分钟，手动入口给它更长的余地。
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
-		pick, err := ai.Suggest(ctx, newAIClient(cfg), ai.SuggestInput{
+		aiCtx, cancelAI := context.WithTimeout(ctx, 120*time.Second)
+		defer cancelAI()
+		pick, err := ai.Suggest(aiCtx, newAIClient(cfg), ai.SuggestInput{
 			Song:        song,
 			Candidates:  candidates,
-			Preferences: a.aiPreferenceTexts(lib),
+			Preferences: prefs,
 			WebResults:  toWebResults(results),
 		})
+		name := pick.PlaylistID
+		for _, c := range candidates {
+			if c.ID == pick.PlaylistID {
+				name = c.Name
+				break
+			}
+		}
 		a.post(func() {
-			d := &a.aiSuggestion
-			d.busy = false
-			if err != nil || pick.PlaylistID == "" {
-				d.failed = true
-				return
-			}
-			d.pick = pick
-			for _, c := range candidates {
-				if c.ID == pick.PlaylistID {
-					d.name = c.Name
-					break
-				}
-			}
+			a.finishAISuggestion(tr.ID, pick, name, err == nil && pick.PlaylistID != "")
 		})
 	}()
+}
+
+// finishAISuggestion settles the manual dialog, and the folded task if the
+// listener put it in the background while the model was working.
+func (a *app) finishAISuggestion(id string, pick ai.Suggestion, name string, ok bool) {
+	d := &a.aiSuggestion
+	if d.track.ID != id {
+		return
+	}
+	d.busy = false
+	d.stage = aiBarDone
+	if ok {
+		d.pick, d.name, d.failed = pick, name, false
+	} else {
+		d.pick, d.failed = ai.Suggestion{}, true
+	}
+	if task := d.task; task != nil {
+		task.cancel = nil
+		if ok {
+			task.state, task.status = backgroundTaskSucceeded, Tf("Suggests %s", name)
+			task.actions = []backgroundTaskAction{{label: T("Add"), run: func() {
+				d.open = false
+				a.addTo(d.lib, pick.PlaylistID, &d.track)
+				a.removeBackgroundTask(task)
+				d.task = nil
+				a.redraw()
+			}}}
+		} else {
+			task.state, task.status = backgroundTaskFailed, T("Couldn't guess a playlist. Choose one yourself.")
+		}
+	}
+	a.redraw()
+}
+
+// foldAISuggestion closes the dialog but keeps the work going in the task
+// center, so a slow search does not block the rest of the app.
+func (a *app) foldAISuggestion() {
+	d := &a.aiSuggestion
+	if d.stage == aiBarIdle {
+		return
+	}
+	d.open = false
+	d.evidenceOpen = false
+	// 已折叠过：再次收起只是关掉重新打开的弹窗，任务卡继续留着。
+	if d.task != nil {
+		a.redraw()
+		return
+	}
+	summary := T("AI Playlist Suggestion")
+	if artists := d.track.ArtistNames(); artists != "" {
+		summary += " · " + artists
+	}
+	task := a.newQuietBackgroundTask(d.track.Name, summary)
+	task.kind = backgroundTaskAI
+	task.status = aiStageStatus(d.stage)
+	task.open = func() {
+		d.open = true
+		a.redraw()
+	}
+	task.cancel = func() {
+		if d.cancel != nil {
+			d.cancel()
+		}
+		task.state, task.status = backgroundTaskCanceled, T("Canceled")
+		task.cancel, task.retry = nil, nil
+		delete(a.aiAsked, d.track.ID)
+		a.redraw()
+	}
+	d.task = task
+	a.redraw()
+}
+
+// dropAISuggestion cancels the manual request and forgets a folded task.
+func (a *app) dropAISuggestion() {
+	d := &a.aiSuggestion
+	if d.cancel != nil {
+		d.cancel()
+	}
+	if task := d.task; task != nil {
+		if task.state == backgroundTaskRunning {
+			task.state, task.status = backgroundTaskCanceled, T("Canceled")
+			task.cancel = nil
+		}
+		a.removeBackgroundTask(task)
+	}
+	a.aiSuggestion = aiSuggestionState{}
+	a.aiBar = aiBarState{}
+	a.aiRefine = aiRefineState{}
+	a.aiSuggestion.open = false
+	a.redraw()
 }
 
 func (a *app) aiConfig(web bool) ai.Config {
@@ -167,11 +304,8 @@ func (a *app) aiWebProvider() websearch.Provider {
 // aiWebContext searches the web for the song's identity before the
 // suggestion, so the model can correct a mismatched name or a lost artist.
 // 查询只含歌曲信息，不含用户的歌单名；失败返回 nil 按无联网继续。
-func (a *app) aiWebContext(ctx context.Context, song ai.Song) []websearch.Result {
-	p := a.aiWebProvider()
-	if p == nil {
-		return nil
-	}
+// aiSearchQuery 只含歌曲信息，不含用户的歌单名；界面也用它展示实际搜了什么。
+func aiSearchQuery(song ai.Song) string {
 	query := song.Name
 	if song.Artists != "" {
 		query += " " + song.Artists
@@ -179,7 +313,15 @@ func (a *app) aiWebContext(ctx context.Context, song ai.Song) []websearch.Result
 	if song.Album != "" {
 		query += " " + song.Album
 	}
-	results, err := p.Search(ctx, query)
+	return query
+}
+
+func (a *app) aiWebContext(ctx context.Context, song ai.Song) []websearch.Result {
+	p := a.aiWebProvider()
+	if p == nil {
+		return nil
+	}
+	results, err := p.Search(ctx, aiSearchQuery(song))
 	if err != nil || len(results) == 0 {
 		return nil
 	}
@@ -286,36 +428,61 @@ func (a *app) aiSettings(c *ui.Context, p palette, s *settings, row settingsRow,
 			}
 		})
 	})
-	a.aiPreferencesSettings(c, p, row, block)
+	a.aiPreferencesSettings(c, p, block)
 }
 
 // aiPreferencesSettings shows what the AI has learned, one row per preference,
 // each removable by hand, and a way to add one without adopting a suggestion.
 // 偏好跟随当前激活音源与账号，切换来源后这里看到的是另一份列表。
-func (a *app) aiPreferencesSettings(c *ui.Context, p palette, row settingsRow, block settingsBlock) {
+func (a *app) aiPreferencesSettings(c *ui.Context, p palette, block settingsBlock) {
 	if a.aiPrefs == nil || a.library == nil {
 		return
 	}
 	settingsHeading(c, block, T("AI Learned Preferences"), iconSparkles)
 	block(T("AI Learned Preferences"), func() {
 		prefs := a.aiPrefs.forListener(a.library.id, a.library.listener())
+		ui.Text(c.Key("ai-prefs-limit"), Tf("Keep up to %d preferences per source and account. When full, new entries replace the oldest.", preferenceLimit)).
+			FontSize(11.5).TextColor(p.muted).LineHeight(1.4).Margin(8, 16, 8, 16)
 		if len(prefs) == 0 {
 			// 空态说明偏好从哪来，避免用户以为要在这里凭空配置。
 			ui.Text(c.Key("ai-prefs-empty"), T("Preferences the AI learns when you adopt an adjusted suggestion show here. Add one to start.")).
 				FontSize(12).TextColor(p.muted).LineHeight(1.4).Margin(8, 16, 8, 16)
 		}
 		for i, pref := range prefs {
-			row(Tf("Preference %d", i+1), "", func() {
-				ui.Column(c).Width(340).MaxWidthPercent(100).Gap(2).Children(func() {
-					ui.Text(c, pref.Text).FontSize(12.5).LineHeight(1.4)
-					// 歌单名与时间归为辅助信息，让原话保持最醒目。
-					by := Tf("→ %s · %s", pref.PlaylistName, i18n.Ago(pref.UpdatedAt, time.Now()))
-					if pref.PlaylistName == "" {
-						by = i18n.Ago(pref.UpdatedAt, time.Now())
+			ui.Row(c.Key(fmt.Sprintf("ai-pref-%d", i))).Padding(10, 16).Gap(10).AlignItems(ui.Center).Children(func() {
+				if pref.CoverURL != "" {
+					a.cover(c, pref.CoverURL, 96, 40, 6).Shrink(0)
+				}
+				ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(3).Children(func() {
+					title := pref.TrackName
+					if title == "" {
+						title = pref.Text
 					}
-					ui.Text(c, by).FontSize(11).TextColor(p.muted).SingleLine()
+					if title == "" {
+						title = Tf("Preference %d", i+1)
+					}
+					ui.Text(c, title).FontSize(13).FontWeight(600).SingleLine().Shrink(1).MinWidth(0)
+					details := pref.Artists
+					if pref.Album != "" {
+						if details != "" {
+							details += " · "
+						}
+						details += pref.Album
+					}
+					if details != "" {
+						ui.Text(c, details).FontSize(11).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(0)
+					}
+					if pref.TrackName != "" && pref.Text != "" {
+						ui.Text(c, Tf("You asked: %s", pref.Text)).FontSize(12).LineHeight(1.35)
+					}
+					if pref.PlaylistName != "" || !pref.UpdatedAt.IsZero() {
+						by := i18n.Ago(pref.UpdatedAt, time.Now())
+						if pref.PlaylistName != "" {
+							by = Tf("→ %s · %s", pref.PlaylistName, by)
+						}
+						ui.Text(c, by).FontSize(11).TextColor(p.muted).SingleLine()
+					}
 				})
-				// 删除即生效且不可撤销，与偏好是模型提示词一部分的轻量定位一致。
 				if iconButton(c.Key("ai-pref-remove"), iconTrash, 15, p.muted, T("Remove")).
 					Size(28, 28).Radius(7).Clicked() {
 					a.aiPrefs.remove(a.library.id, a.library.listener(), i)
@@ -438,7 +605,7 @@ func (a *app) closeAIBar(id string) {
 }
 
 // autoSuggestPlaylist asks for a suggestion after the source confirmed a like.
-// 推荐条立刻显示搜索与判断阶段；模型没把握就自动收起，不打扰。
+// 搜索与判断只放在任务队列里，模型有把握才亮出推荐条，没把握就安静收走。
 func (a *app) autoSuggestPlaylist(lib *library, tr music.Track) {
 	if !a.settings.AIEnabled || a.settings.AIAutoSuggestDisabled ||
 		a.settings.AIBaseURL == "" || a.settings.AIModel == "" {
@@ -451,50 +618,87 @@ func (a *app) autoSuggestPlaylist(lib *library, tr music.Track) {
 		return
 	}
 	a.aiAsked[tr.ID] = true
-	cfg := a.aiConfig(a.settings.AIWebProvider == "native")
-	// 先亮出推荐条，让"正在搜索 / 正在判断"看得见。
-	a.post(func() {
-		a.aiBar = aiBarState{open: true, track: tr, lib: lib, stage: aiBarSearching}
+	prefs, learned := a.aiPreferenceTexts(lib, tr.ID)
+	cfg := a.aiConfig(a.settings.AIWebProvider == "native" && !learned)
+	song := ai.Song{Name: tr.Name, Artists: tr.ArtistNames(), Album: tr.Album.Name}
+	query, web := a.aiSearchQueryFor(song, learned)
+	stage := aiBarThinking
+	if web {
+		stage = aiBarSearching
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	summary := T("AI Playlist Suggestion")
+	if artists := tr.ArtistNames(); artists != "" {
+		summary += " · " + artists
+	}
+	task := a.newQuietBackgroundTask(tr.Name, summary)
+	task.kind = backgroundTaskAI
+	task.status = aiStageStatus(stage)
+	task.cancel = func() {
+		cancel()
+		task.state, task.status = backgroundTaskCanceled, T("Canceled")
+		task.cancel = nil
+		delete(a.aiAsked, tr.ID)
 		a.redraw()
-	})
+	}
+	a.redraw()
 	go func() {
-		song := ai.Song{Name: tr.Name, Artists: tr.ArtistNames(), Album: tr.Album.Name}
+		defer cancel()
 		candidates := a.aiCandidates(lib, &tr, 0)
 		if len(candidates) == 0 {
-			a.post(func() { a.closeAIBar(tr.ID) })
+			a.post(func() {
+				a.dropAIBackgroundTask(task)
+				delete(a.aiAsked, tr.ID)
+				a.redraw()
+			})
 			return
 		}
 		// 应用侧搜索给独立子超时；失败或没结果就按无联网继续判断。
-		webCtx, cancelWeb := context.WithTimeout(context.Background(), 20*time.Second)
-		results := a.aiWebContext(webCtx, song)
-		cancelWeb()
+		var results []websearch.Result
+		if web {
+			webCtx, cancelWeb := context.WithTimeout(ctx, 20*time.Second)
+			results = a.aiWebContext(webCtx, song)
+			cancelWeb()
+		}
 		if len(results) > 5 {
 			results = results[:5]
 		}
 		a.post(func() {
-			if a.aiBarMatches(tr.ID) {
-				a.aiBar.stage = aiBarThinking
-				a.aiBar.sources = results
-				a.redraw()
+			if task.removed || task.state != backgroundTaskRunning {
+				return
 			}
+			task.status = aiStageStatus(aiBarThinking)
+			a.redraw()
 		})
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		pick, err := ai.Suggest(ctx, newAIClient(cfg), ai.SuggestInput{
+		aiCtx, cancelAI := context.WithTimeout(ctx, 30*time.Second)
+		defer cancelAI()
+		pick, err := ai.Suggest(aiCtx, newAIClient(cfg), ai.SuggestInput{
 			Song:        song,
 			Candidates:  candidates,
-			Preferences: a.aiPreferenceTexts(lib),
+			Preferences: prefs,
 			WebResults:  toWebResults(results),
 		})
 		if err != nil {
 			a.post(func() {
 				delete(a.aiAsked, tr.ID)
-				a.closeAIBar(tr.ID)
+				a.dropAIBackgroundTask(task)
+				// 失败只提示一次；提示里直接重试，不必先取消喜欢再点一次。
+				a.aiToast = &ui.Toast{
+					ID:       "ai-suggest-failed-" + tr.ID,
+					Title:    T("Couldn't suggest a playlist"),
+					Action:   T("Retry"),
+					OnAction: func() { a.autoSuggestPlaylist(lib, tr) },
+					Timeout:  10 * time.Second,
+				}
+				a.redraw()
 			})
 			return
 		}
 		if pick.PlaylistID == "" || pick.Confidence < 0.85 {
-			a.post(func() { a.closeAIBar(tr.ID) })
+			a.post(func() {
+				a.dropAIBackgroundTask(task)
+				a.redraw()
+			})
 			return
 		}
 		name := pick.PlaylistID
@@ -505,13 +709,15 @@ func (a *app) autoSuggestPlaylist(lib *library, tr music.Track) {
 			}
 		}
 		a.post(func() {
-			if !a.aiBarMatches(tr.ID) {
+			if task.removed {
 				return
 			}
+			a.dropAIBackgroundTask(task)
 			a.aiToast = nil
-			a.aiBar.pick = pick
-			a.aiBar.name = name
-			a.aiBar.stage = aiBarDone
+			a.aiBar = aiBarState{
+				open: true, track: tr, lib: lib, pick: pick, name: name,
+				stage: aiBarDone, sources: results, query: query,
+			}
 			if a.settings.AIAutoAdd && lib.can("removeFromPlaylist") {
 				a.aiBar.busy = true
 				a.addToThen(lib, pick.PlaylistID, &tr, func(err error) {
@@ -536,9 +742,25 @@ func (a *app) autoSuggestPlaylist(lib *library, tr music.Track) {
 	}()
 }
 
+// dropAIBackgroundTask removes a quiet AI record even while it is still the
+// running task; the caller has already stopped its work.
+func (a *app) dropAIBackgroundTask(task *backgroundTask) {
+	if task == nil || task.removed {
+		return
+	}
+	if task.state == backgroundTaskRunning {
+		task.state, task.status = backgroundTaskCanceled, T("Canceled")
+		task.cancel = nil
+	}
+	a.removeBackgroundTask(task)
+}
+
 // addSuggested adds what the bar or the dialog suggests, and lets the
-// suggestion go.
+// suggestion go, including any record it left in the task center.
 func (a *app) addSuggested(lib *library, tr *music.Track, pick ai.Suggestion) {
+	if task := a.aiSuggestion.task; task != nil {
+		a.dropAIBackgroundTask(task)
+	}
 	a.aiBar.open = false
 	a.aiSuggestion.open = false
 	a.aiRefine.open = false
@@ -548,10 +770,7 @@ func (a *app) addSuggested(lib *library, tr *music.Track, pick ai.Suggestion) {
 // closeSuggestion hides the suggestion for this song for the rest of the
 // session, as aiAsked already keeps it from being asked again.
 func (a *app) closeSuggestion() {
-	a.aiBar = aiBarState{}
-	a.aiSuggestion.open = false
-	a.aiRefine = aiRefineState{}
-	a.redraw()
+	a.dropAISuggestion()
 }
 
 // aiSuggestOverlay draws the suggestion and its evidence above everything,
@@ -578,7 +797,7 @@ func (a *app) evidencePanel(c *ui.Context, p palette, left, bottom float32) {
 		return
 	}
 	g := shellGlass(p.dark, 0.48, 0.52)
-	panel := ui.Column(c.Key("ai-evidence")).Absolute().Left(left).Right(16).Bottom(bottom + 64).
+	panel := ui.Column(c.Key("ai-evidence")).Absolute().Left(left).Right(16).Bottom(bottom+64).
 		Padding(14).Gap(6).Radius(16).
 		// 依据面板压在最前台，玻璃调得更实，避免透出下面的播放条显脏。
 		Material(glass.Glass{Style: glass.Regular, Clarity: 0.88, Tint: g.tint}).
@@ -640,8 +859,13 @@ func (a *app) suggestionBar(c *ui.Context, p palette, left, bottom float32) {
 				title = T("Couldn't guess a playlist. Choose one yourself.")
 			}
 			ui.Text(c, title).FontSize(13).FontWeight(600).SingleLine().Shrink(1).MinWidth(0)
-			if b.settled() && b.pick.Reason != "" && !b.failed {
-				ui.Text(c, b.pick.Reason).FontSize(11.5).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(0)
+			// 有联网时第二行优先展示实际搜索词，让听众知道结论从何而来。
+			line := b.pick.Reason
+			if b.query != "" {
+				line = Tf("Search: %s", b.query)
+			}
+			if b.settled() && line != "" && !b.failed {
+				ui.Text(c, line).FontSize(11.5).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(0)
 			}
 		})
 		if b.settled() && !b.busy && !b.failed {
@@ -700,40 +924,94 @@ func (a *app) aiCandidates(lib *library, tr *music.Track, samples int) []ai.Cand
 func (a *app) aiSuggestionDialog(c *ui.Context) {
 	p := a.pal
 	d := &a.aiSuggestion
+	// 背景点击或 Esc 关闭时，进行中的工作折叠进任务中心，而不是白跑一趟。
+	if d.busy && !d.open && d.task == nil && d.stage != aiBarIdle {
+		a.foldAISuggestion()
+	}
 	ui.DialogBase(c.Key("ai-suggestion"), &d.open, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.35))
-		panel.Width(420).Height(240).Padding(24).Radius(18).Gap(14).
+		panel.Width(420).MinHeight(240).MaxHeight(560).Padding(24).Radius(18).Gap(14).
 			Background(p.bg).Border(1, p.hairline).Shadow(0, 24, 60, -12, ui.RGBA(0, 0, 0, 0.4)).
 			Transition(ui.ElementTransition{Animation: &ui.Snappy, Enter: &ui.Motion{Scale: 0.94}, Exit: &ui.Motion{Scale: 0.96}})
 		panel.Children(func() {
-			ui.Column(c).Gap(14).Children(func() {
+			ui.Column(c).Gap(12).Children(func() {
 				ui.Text(c, T("AI Playlist Suggestion")).FontSize(17).FontWeight(700)
 				switch {
 				case d.busy:
-					ui.Text(c, T("Thinking…")).FontSize(13).TextColor(p.muted)
+					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Spinner(c).FontSize(14).TextColor(p.accent).Label(aiStageStatus(d.stage))
+						ui.Text(c, aiStageStatus(d.stage)).FontSize(13).TextColor(p.muted)
+					})
+					if d.query != "" {
+						ui.Text(c, Tf("Search: %s", d.query)).FontSize(12).TextColor(p.faint)
+					}
 				case d.failed:
 					ui.Text(c, T("Couldn't guess a playlist. Choose one yourself.")).FontSize(13).TextColor(p.muted)
+					if d.query != "" {
+						ui.Text(c, Tf("Search: %s", d.query)).FontSize(12).TextColor(p.faint)
+					}
 				default:
 					ui.Text(c, d.name).FontSize(15).FontWeight(600)
 					ui.Text(c, d.pick.Reason).FontSize(13).TextColor(p.muted)
-					ui.Text(c, Tf("%d percent confident", int(d.pick.Confidence*100))).FontSize(11).TextColor(p.muted)
+					ui.Text(c, Tf("%d percent confident", int(d.pick.Confidence*100))).FontSize(11).TextColor(p.faint)
+					if d.query != "" || len(d.sources) > 0 {
+						if pillButton(c.Key("ai-dialog-evidence"), nil,
+							Tf("Evidence · %d pages", len(d.sources)), p.hover.Over(p.bg), p.text).Clicked() {
+							d.evidenceOpen = !d.evidenceOpen
+						}
+						if d.evidenceOpen {
+							a.aiSuggestionEvidence(c, p)
+						}
+					}
 				}
 				ui.Row(c).Width(372).Height(36).Gap(10).Justify(ui.End).Children(func() {
 					if pillButton(c.Key("ai-cancel"), nil, T("Cancel"), p.hover.Over(p.bg), p.text).Clicked() {
-						d.open = false
+						a.dropAISuggestion()
 					}
-					if !d.busy && !d.failed {
+					if d.busy {
+						if pillButton(c.Key("ai-fold"), nil, T("Fold"), p.hover.Over(p.bg), p.text).Clicked() {
+							a.foldAISuggestion()
+						}
+					} else if !d.failed {
 						if pillButton(c.Key("ai-suggestion-adjust"), nil, T("Adjust"), p.hover.Over(p.bg), p.text).Clicked() {
 							a.openAIRefineFromSuggestion()
 						}
 						if pillButton(c.Key("ai-add"), nil, T("Add"), p.accent, p.onAccent).Clicked() {
-							d.open = false
-							a.addTo(d.lib, d.pick.PlaylistID, &d.track)
+							a.addSuggested(d.lib, &d.track, d.pick)
 						}
 					}
 				})
 			})
 		})
+	})
+}
+
+// aiSuggestionEvidence lists the actual query and the pages the model read,
+// inside the dialog, so the listener can check the suggestion without leaving.
+func (a *app) aiSuggestionEvidence(c *ui.Context, p palette) {
+	d := &a.aiSuggestion
+	ui.Column(c).Padding(12, 14).Gap(6).Radius(12).
+		Background(p.hover).Border(1, p.hairline).Children(func() {
+		if d.query != "" {
+			ui.Text(c, Tf("Search: %s", d.query)).FontSize(11.5).TextColor(p.muted)
+		}
+		if len(d.sources) == 0 {
+			ui.Text(c, T("No web results")).FontSize(11.5).TextColor(p.muted)
+			return
+		}
+		for index, src := range d.sources {
+			if src.Title == "" || src.URL == "" {
+				continue
+			}
+			link := ui.ButtonBase(c.Key(fmt.Sprint("ai-dialog-source-", index))).
+				Height(22).Justify(ui.Start).Role(ui.RoleLink).Label(src.Title)
+			if link.Clicked() {
+				mygo.Shell.OpenExternal(src.URL)
+			}
+			link.Children(func() {
+				ui.Text(c, src.Title).FontSize(11.5).TextColor(p.text).SingleLine().Shrink(1).MinWidth(0)
+			})
+		}
 	})
 }
 
@@ -757,6 +1035,7 @@ func (a *app) openAIRefineFrom(tr music.Track, lib *library, pick ai.Suggestion,
 	if lib == nil {
 		return
 	}
+	prefs, _ := a.aiPreferenceTexts(lib, tr.ID)
 	a.aiRefine = aiRefineState{
 		open:    true,
 		track:   tr,
@@ -764,7 +1043,7 @@ func (a *app) openAIRefineFrom(tr music.Track, lib *library, pick ai.Suggestion,
 		history: []ai.Message{{Role: "assistant", Content: suggestionJSON(pick)}},
 		pick:    pick,
 		name:    name,
-		prefs:   a.aiPreferenceTexts(lib),
+		prefs:   prefs,
 	}
 	go func() {
 		candidates := a.aiCandidates(lib, &tr, 100)
@@ -815,7 +1094,13 @@ func (a *app) refineSuggestion() {
 					break
 				}
 			}
-			d.learned = text
+			var adjustments []string
+			for _, message := range d.history {
+				if message.Role == "user" {
+					adjustments = append(adjustments, message.Content)
+				}
+			}
+			d.learned = strings.Join(adjustments, "\n")
 			a.redraw()
 		})
 	}()
@@ -825,32 +1110,64 @@ func (a *app) refineSuggestion() {
 // when they adopt it.
 func (a *app) adoptRefined() {
 	d := &a.aiRefine
-	if d.pick.PlaylistID == "" {
+	if d.pick.PlaylistID == "" || d.lib == nil {
 		return
 	}
-	if a.aiPrefs != nil && d.learned != "" {
-		a.aiPrefs.add(Preference{
-			Source:       d.lib.id,
-			Account:      d.lib.listener(),
-			Text:         d.learned,
-			PlaylistID:   d.pick.PlaylistID,
-			PlaylistName: d.name,
-		})
+	lib, tr, pick := d.lib, d.track, d.pick
+	preference := Preference{
+		Source:       lib.id,
+		Account:      lib.listener(),
+		Text:         d.learned,
+		TrackID:      tr.ID,
+		TrackName:    tr.Name,
+		Artists:      tr.ArtistNames(),
+		Album:        tr.Album.Name,
+		CoverURL:     tr.Album.ImageURL,
+		PlaylistID:   pick.PlaylistID,
+		PlaylistName: d.name,
 	}
-	a.addSuggested(d.lib, &d.track, d.pick)
+	a.aiBar.open = false
+	a.aiSuggestion.open = false
+	a.aiRefine.open = false
+	a.addToThen(lib, pick.PlaylistID, &tr, func(err error) {
+		if err != nil {
+			return
+		}
+		// 歌单确实加入成功才记录采纳，避免失败后把错误结果当作偏好。
+		if a.aiPrefs != nil && preference.Text != "" {
+			a.aiPrefs.add(preference)
+		}
+		a.toast = T("Added to the playlist")
+	})
 }
 
-// aiPreferenceTexts is what this source and account taught the AI, for the
-// prompt.
-func (a *app) aiPreferenceTexts(lib *library) []string {
+// aiPreferenceTexts returns the prompt notes and whether they cover this song.
+func (a *app) aiPreferenceTexts(lib *library, trackID string) ([]string, bool) {
 	if a.aiPrefs == nil {
-		return nil
+		return nil, false
 	}
 	var out []string
+	learned := false
 	for _, p := range a.aiPrefs.forListener(lib.id, lib.listener()) {
-		out = append(out, p.Text)
+		learned = learned || (trackID != "" && p.TrackID == trackID)
+		var note strings.Builder
+		if p.TrackName != "" {
+			fmt.Fprintf(&note, "%q", p.TrackName)
+			if p.Artists != "" {
+				fmt.Fprintf(&note, " by %s", p.Artists)
+			}
+			if p.Album != "" {
+				fmt.Fprintf(&note, " (album: %s)", p.Album)
+			}
+			note.WriteString(". ")
+		}
+		fmt.Fprintf(&note, "The listener asked for: %s.", p.Text)
+		if p.PlaylistName != "" {
+			fmt.Fprintf(&note, " They chose the %q playlist.", p.PlaylistName)
+		}
+		out = append(out, note.String())
 	}
-	return out
+	return out, learned
 }
 
 func suggestionJSON(s ai.Suggestion) string {

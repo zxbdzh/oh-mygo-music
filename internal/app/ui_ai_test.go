@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -434,11 +435,48 @@ func TestAIFrames(t *testing.T) {
 	settled(view)
 	saveFrame(t, dir, "ai-suggestion-adjust.png", view.Image())
 
+	// 手动入口搜索中：弹窗直接显示阶段和实际搜索词，不用等结果。
+	busy := newTestApp()
+	busy.aiSuggestion = aiSuggestionState{
+		open: true, busy: true, stage: aiBarSearching, query: "夜曲 周杰伦",
+		track: song("1", "夜曲", "周杰伦"), lib: busy.library,
+	}
+	busyView := ui.NewTester(busy.view, 1200, 800)
+	settled(busyView)
+	saveFrame(t, dir, "ai-suggestion-searching.png", busyView.Image())
+
+	// 手动入口出结果并展开依据：搜索词和来源都能在弹窗里核对。
+	manual := newTestApp()
+	manual.aiSuggestion = aiSuggestionState{
+		open: true, stage: aiBarDone, evidenceOpen: true,
+		track: song("1", "夜曲", "周杰伦"), lib: manual.library,
+		query: "夜曲 周杰伦",
+		pick:  ai.Suggestion{PlaylistID: "10", Confidence: 0.9, Reason: "适合通勤"},
+		name:  "通勤",
+		sources: []websearch.Result{
+			{Title: "夜曲 - 周杰伦", URL: "https://example.com/song"},
+		},
+	}
+	manualView := ui.NewTester(manual.view, 1200, 800)
+	settled(manualView)
+	saveFrame(t, dir, "ai-suggestion-evidence.png", manualView.Image())
+
+	// 折叠后由任务卡接管：完成状态给出建议，并保留添加动作。
+	folded := newTestApp()
+	folded.backgroundTasksOpen = true
+	task := folded.newQuietBackgroundTask("夜曲", T("AI Playlist Suggestion")+" · 周杰伦")
+	task.kind = backgroundTaskAI
+	task.update(task.generation, backgroundTaskSucceeded, Tf("Suggests %s", "通勤"))
+	task.actions = []backgroundTaskAction{{label: T("Add"), icon: iconPlus, run: func() {}}}
+	foldedView := ui.NewTester(folded.view, 1200, 800)
+	settled(foldedView)
+	saveFrame(t, dir, "ai-task-card.png", foldedView.Image())
+
 	bar := newTestApp()
 	bar.aiBar = aiBarState{open: true, stage: aiBarDone, lib: bar.library,
 		track: song("1", "夜曲", "周杰伦"), pick: ai.Suggestion{
 			PlaylistID: "10", Confidence: 0.9, Reason: "适合通勤",
-		}, name: "通勤"}
+		}, name: "通勤", query: "夜曲 周杰伦"}
 	barView := ui.NewTester(bar.view, 1200, 800)
 	settled(barView)
 	saveFrame(t, dir, "ai-suggestion-bar.png", barView.Image())
@@ -474,6 +512,204 @@ func TestAIFrames(t *testing.T) {
 	npView := ui.NewTester(np.view, 1200, 800)
 	settled(npView)
 	saveFrame(t, dir, "ai-bar-on-now-playing.png", npView.Image())
+}
+
+// Manual suggestions show the search stage, the actual query and the pages
+// behind the pick, before the listener confirms it.
+func TestManualSuggestionShowsStageQueryAndEvidence(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"content": `{"playlist_id":"10","confidence":0.9,"reason":"适合通勤"}`,
+			}}},
+		})
+	}))
+	defer srv.Close()
+
+	queried := make(chan string, 1)
+	useFakeSearch(t, fakeSearchProvider{
+		results: []websearch.Result{{Title: "夜曲 - 周杰伦", URL: "https://example.com/song"}},
+		queried: queried,
+	})
+
+	a := newTestApp()
+	a.settings.AIEnabled = true
+	a.settings.AIBaseURL = srv.URL
+	a.settings.AIModel = "m"
+	a.settings.AIWebProvider = "tavily"
+	a.mine = []music.Playlist{{ID: "10", Name: "通勤", Mine: true}}
+	tr := song("1", "夜曲", "周杰伦")
+	a.playlists["42"] = &music.Playlist{ID: "42", Name: "List", Tracks: []music.Track{tr}}
+	a.route = route{page: pagePlaylist, src: "fake", id: "42"}
+	var added []string
+	f := fake(a)
+	f.playlist = func(id string) (*music.Playlist, error) {
+		return &music.Playlist{ID: id, Tracks: []music.Track{song("2", "稻香", "周杰伦")}}, nil
+	}
+	f.addTo = func(id string, tracks []string) error {
+		added = append(added, id)
+		return nil
+	}
+
+	ch := posts(a)
+	a.openAISuggestion(&tr)
+	if a.aiSuggestion.stage != aiBarSearching {
+		t.Fatalf("stage = %v, want searching", a.aiSuggestion.stage)
+	}
+	if !strings.Contains(a.aiSuggestion.query, "夜曲") {
+		t.Fatalf("query = %q", a.aiSuggestion.query)
+	}
+	if q := <-queried; !strings.Contains(q, "夜曲") || strings.Contains(q, "通勤") {
+		t.Fatalf("query = %q, want the song only", q)
+	}
+	until(t, ch, func() bool { return a.aiSuggestion.stage == aiBarThinking })
+	until(t, ch, func() bool { return !a.aiSuggestion.busy })
+
+	tt := ui.NewTester(a.view, 1200, 800)
+	settled(tt)
+	texts := strings.Join(tt.Texts(), "\n")
+	if !strings.Contains(texts, "通勤") || !strings.Contains(texts, "适合通勤") {
+		t.Fatalf("dialog texts = %q", texts)
+	}
+	if err := tt.Click(Tf("Evidence · %d pages", 1)); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	evidence := strings.Join(tt.Texts(), "\n")
+	if !strings.Contains(evidence, "Search: 夜曲 周杰伦") {
+		t.Fatalf("query %q missing from evidence: %q", a.aiSuggestion.query, evidence)
+	}
+	if !strings.Contains(evidence, "夜曲 - 周杰伦") {
+		t.Fatalf("evidence texts = %q", tt.Texts())
+	}
+	if err := tt.Click(T("Add")); err != nil {
+		t.Fatal(err)
+	}
+	until(t, ch, func() bool { return len(added) == 1 })
+	if added[0] != "10" {
+		t.Errorf("added = %v, want 10", added)
+	}
+}
+
+// Folding the manual dialog leaves the work in the task center, where its
+// result can be added without reopening the dialog.
+func TestFoldingManualSuggestionRunsInTaskCenter(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"content": `{"playlist_id":"10","confidence":0.9,"reason":"适合通勤"}`,
+			}}},
+		})
+	}))
+	defer srv.Close()
+
+	useFakeSearch(t, fakeSearchProvider{
+		results: []websearch.Result{{Title: "夜曲 - 周杰伦", URL: "https://example.com/song"}},
+	})
+
+	a := newTestApp()
+	a.settings.AIEnabled = true
+	a.settings.AIBaseURL = srv.URL
+	a.settings.AIModel = "m"
+	a.settings.AIWebProvider = "tavily"
+	a.mine = []music.Playlist{{ID: "10", Name: "通勤", Mine: true}}
+	tr := song("1", "夜曲", "周杰伦")
+	a.playlists["42"] = &music.Playlist{ID: "42", Name: "List", Tracks: []music.Track{tr}}
+	a.route = route{page: pagePlaylist, src: "fake", id: "42"}
+	var added []string
+	f := fake(a)
+	f.playlist = func(id string) (*music.Playlist, error) {
+		return &music.Playlist{ID: id, Tracks: []music.Track{song("2", "稻香", "周杰伦")}}, nil
+	}
+	f.addTo = func(id string, tracks []string) error {
+		added = append(added, id)
+		return nil
+	}
+
+	ch := posts(a)
+	a.openAISuggestion(&tr)
+	tt := ui.NewTester(a.view, 1200, 800)
+	tt.Frame()
+	until(t, ch, func() bool { return a.aiSuggestion.stage == aiBarThinking })
+	tt.Frame()
+	if err := tt.Click(T("Fold")); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.aiSuggestion.open {
+		t.Fatal("the dialog stayed open after folding")
+	}
+	if len(a.backgroundTasks) != 1 || a.backgroundTasks[0].kind != backgroundTaskAI {
+		t.Fatalf("tasks = %+v", a.backgroundTasks)
+	}
+	task := a.backgroundTasks[0]
+	if task.title != tr.Name || !strings.Contains(task.summary, T("AI Playlist Suggestion")) {
+		t.Fatalf("task = %q / %q", task.title, task.summary)
+	}
+
+	unblock()
+	until(t, ch, func() bool { return task.state == backgroundTaskSucceeded })
+	tt.Frame()
+	if task.status != Tf("Suggests %s", "通勤") {
+		t.Fatalf("status = %q", task.status)
+	}
+	if err := tt.Click("Background Tasks (1)"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click(T("Add")); err != nil {
+		t.Fatal(err)
+	}
+	until(t, ch, func() bool { return len(added) == 1 })
+	if added[0] != "10" || len(a.backgroundTasks) != 0 {
+		t.Fatalf("added = %v, tasks = %d", added, len(a.backgroundTasks))
+	}
+}
+
+// A failed auto suggestion says so once and lets a later like ask again.
+func TestLikeSuggestionFailureShowsToastAndRetries(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	a := newTestApp()
+	a.settings.AIEnabled = true
+	a.settings.AIBaseURL = srv.URL
+	a.settings.AIModel = "m"
+	a.mine = []music.Playlist{{ID: "10", Name: "通勤", Mine: true}}
+	tr := song("1", "夜曲", "周杰伦")
+	a.pl.Cue([]music.Track{tr})
+	a.account = &music.Account{ID: "1"}
+	f := fake(a)
+	f.like = func(id string, on bool) error { return nil }
+
+	ch := posts(a)
+	a.likeCurrent()
+	until(t, ch, func() bool { return a.aiToast != nil })
+	if a.aiToast.Title != T("Couldn't suggest a playlist") || a.aiToast.Action != T("Retry") {
+		t.Fatalf("toast = %+v", a.aiToast)
+	}
+	if a.aiBar.open || len(a.backgroundTasks) != 0 {
+		t.Fatalf("a failed suggestion left UI behind: bar=%v tasks=%d", a.aiBar.open, len(a.backgroundTasks))
+	}
+	if a.aiAsked[tr.ID] {
+		t.Fatal("a failed suggestion blocked the next attempt")
+	}
+	// 提示里的重试直接重新发起，不用先取消喜欢再点一次。
+	a.aiToast.OnAction()
+	if len(a.backgroundTasks) != 1 {
+		t.Fatalf("retry did not start a new task: %d", len(a.backgroundTasks))
+	}
 }
 
 // fakeSearchProvider 是无头测试里的联网桩，只返回预设结果或错误。
@@ -531,21 +767,28 @@ func TestLikingShowsSearchThenEvidence(t *testing.T) {
 	f.like = func(id string, on bool) error { return nil }
 	a.likeCurrent()
 
-	// 喜欢后推荐条立刻出现，且第一帧是搜索阶段。
-	until(t, ch, func() bool { return a.aiBar.open })
-	if a.aiBar.stage != aiBarSearching {
-		t.Fatalf("stage = %v, want searching", a.aiBar.stage)
+	// 搜索阶段只进任务队列，不弹推荐条挡路。
+	until(t, ch, func() bool { return len(a.backgroundTasks) == 1 })
+	if a.aiBar.open {
+		t.Fatal("the bar opened before the model answered")
 	}
-	runPost(t, ch) // 进入判断阶段
-	if a.aiBar.stage != aiBarThinking {
-		t.Fatalf("stage = %v, want thinking", a.aiBar.stage)
+	if a.backgroundTasks[0].kind != backgroundTaskAI ||
+		a.backgroundTasks[0].status != T("Searching the web…") {
+		t.Fatalf("task = %+v", a.backgroundTasks[0])
 	}
 	if q := <-queried; !strings.Contains(q, "夜曲") || strings.Contains(q, "通勤") {
 		t.Fatalf("query = %q, want the song only", q)
 	}
+	until(t, ch, func() bool { return a.backgroundTasks[0].status == T("Thinking…") })
 	until(t, ch, func() bool { return a.aiBar.stage == aiBarDone })
+	if len(a.backgroundTasks) != 0 {
+		t.Fatal("the search task stayed after the bar took over")
+	}
 	if len(a.aiBar.sources) != 1 || a.aiBar.sources[0].URL != "https://example.com/song" {
 		t.Fatalf("sources = %+v", a.aiBar.sources)
+	}
+	if !strings.Contains(a.aiBar.query, "夜曲") {
+		t.Fatalf("query = %q", a.aiBar.query)
 	}
 
 	tt := ui.NewTester(a.view, 1200, 800)
@@ -593,9 +836,9 @@ func TestLowConfidenceHidesBarWithEvidence(t *testing.T) {
 	f := fake(a)
 	f.like = func(id string, on bool) error { return nil }
 	a.likeCurrent()
-	until(t, ch, func() bool { return a.aiBar.open && a.aiBar.stage == aiBarThinking })
-	// 低置信度：阶段不会到 done，推荐条应自己收起。
-	runPost(t, ch)
+	// 低置信度：搜索与判断都留在任务队列里，结束后整条安静收走。
+	until(t, ch, func() bool { return len(a.backgroundTasks) == 1 })
+	until(t, ch, func() bool { return len(a.backgroundTasks) == 0 })
 	if a.aiBar.open {
 		t.Fatal("low-confidence bar stayed open")
 	}
