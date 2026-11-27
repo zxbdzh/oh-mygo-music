@@ -294,7 +294,7 @@ func (a *app) nowPlayingView(c *ui.Context) {
 			// 减少透明度时，模糊材质会填充系统主题底色，盖掉沉浸页的深色封面背景。
 			useMaterial := !c.Preferences().ReduceTransparency && a.npPane != paneWall
 			// MV 已经是背景了，封面背景不再画，免得把视频盖住。
-			if !a.mvShown(c) || !a.mv.hasBinding(tr) {
+			if !a.mvShown(c) || !a.mv.hasPicture(tr) {
 				a.backdrop(c, shown, tint, useMaterial)
 			}
 			style := a.settings.CoverBackdropStyle
@@ -311,7 +311,7 @@ func (a *app) nowPlayingView(c *ui.Context) {
 				if blur {
 					shade.Material(glass.Blur{Radius: radius * 0.65})
 				}
-			case blur && !(a.mvShown(c) && a.mv.hasBinding(tr)):
+			case blur && !(a.mvShown(c) && a.mv.hasPicture(tr)):
 				// blur.go 只读取 Mask.From/To 端点透明度；从窗口 26% 处向右侧歌词区渐进模糊，保留左侧清晰封面光影。
 				ui.Box(c.Key("np-pane-blur")).Absolute().Top(0).Left(w * 0.26).Right(0).Bottom(0).PassThrough().
 					Material(glass.Blur{Radius: radius, Mask: &ui.LinearGradient{From: ui.Transparent, To: ui.RGB(0, 0, 0), Angle: 90}})
@@ -320,7 +320,7 @@ func (a *app) nowPlayingView(c *ui.Context) {
 		// Over the backdrop, which is positioned too: positioned elements
 		// paint over those in the flow.
 		body := ui.Column(c).Absolute().Top(0).Left(0).Right(0).Bottom(0)
-		if a.mvShown(c) && a.mv.hasBinding(tr) {
+		if a.mvShown(c) && a.mv.hasPicture(tr) {
 			// 正文的空白区要把指针事件交给画面，歌词和按钮仍可操作。
 			body.PassThrough()
 		}
@@ -595,7 +595,7 @@ func (a *app) mvBody(c *ui.Context, tr *music.Track, accent ui.Color, w, h float
 		a.paneTabs(c)
 		a.mvButton(c, tr)
 	})
-	showingVideo := a.mvShown(c) && a.mv.hasBinding(tr) && (a.mv.frame != nil || a.mv.player.Ready())
+	showingVideo := a.mvShown(c) && a.mv.hasPicture(tr)
 	if !a.settings.MVHideLyrics || !showingVideo {
 		// 歌词列居中，最大 620px；顶栏 72px，底部控制条 72px。
 		ui.Column(c).Absolute().Top(72).Left(max((w-620)/2, 24)).Width(min(w-48, 620)).

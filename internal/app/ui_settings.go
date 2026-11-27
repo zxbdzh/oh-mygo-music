@@ -731,6 +731,22 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 				a.changed()
 			}
 		})
+		row(T("MV Quality Limit"), T("Actual quality depends on the video and your sign-in status."), func() {
+			levels := []int{480, 720, 1080}
+			labels := []string{"480p", "720p", "1080p"}
+			at := slices.Index(levels, a.mvQualityOptions().Limit())
+			if selected, ok := choice(c, "mv-quality", T("MV Quality Limit"), labels, at); ok {
+				s.MVQuality = levels[selected]
+				a.closeMV()
+				a.changed()
+			}
+		})
+		row(T("Prefer 60 fps for MV"), T("Choose the higher frame rate when the same resolution offers both."), func() {
+			if ui.Switch(c.Key("mv-60fps"), &s.MV60FPS).Label(T("Prefer 60 fps for MV")).Changed() {
+				a.closeMV()
+				a.changed()
+			}
+		})
 		row(T("MV Scale"), T("Zoom the MV background. Drag the video to reposition it."), func() {
 			a.mvSettingSlider(c, "mv-scale", T("MV Scale"), &s.MVScale, 100, 220)
 		})

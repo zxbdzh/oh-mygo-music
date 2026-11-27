@@ -3,12 +3,19 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"mygo-music/internal/lyrics"
@@ -148,6 +155,201 @@ func TestMVReducedMotionDoesNotLoadVideo(t *testing.T) {
 	tt.Frame()
 	if a.mv.loading || a.mv.key != "" {
 		t.Fatalf("video loaded under reduce motion: %+v", a.mv)
+	}
+}
+
+// 画质上限和 60 帧偏好写入后，在重新读取设置时保留。
+func TestMVQualityPreferencesSurviveRestart(t *testing.T) {
+	userDataPath, err := mygo.App.Path(mygo.PathUserData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	mygo.App.SetPath(mygo.PathUserData, dir)
+	t.Cleanup(func() { mygo.App.SetPath(mygo.PathUserData, userDataPath) })
+	path, err := settingsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferences := defaultSettings()
+	preferences.MVQuality, preferences.MV60FPS, preferences.path = 720, false, path
+	if err := preferences.save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadSettings()
+	if loaded.MVQuality != 720 || loaded.MV60FPS {
+		t.Fatalf("restored MV preferences %d / %v", loaded.MVQuality, loaded.MV60FPS)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(raw), `"mvQuality": 720`) {
+		t.Fatalf("saved preferences %s, %v", raw, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"mvBackground":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded = loadSettings()
+	if loaded.MVQuality != 1080 || !loaded.MV60FPS {
+		t.Fatalf("legacy settings lost the default MV quality preference: %+v", loaded)
+	}
+}
+
+// 刷新失败只返回通用错误，复制的诊断不包含 Cookie、视频 ID 或上游消息。
+func TestMVRefreshUsesCapturedQualityAndSanitizesFailure(t *testing.T) {
+	a := newTestApp()
+	a.settings.MVQuality, a.mvCredential = 720, "SESSDATA=secret-value"
+	oldResolver := mvResolve
+	mvResolve = func(_ context.Context, videoID string, options mv.QualityOptions, cookie string) (*mv.Resolved, error) {
+		if videoID != "BVTEST" || options.MaxHeight != 720 || cookie != "SESSDATA=secret-value" {
+			t.Errorf("MV resolver received unexpected video or preferences: %q, %+v", videoID, options)
+		}
+		return nil, errors.New("upstream error contains SESSDATA=secret-value")
+	}
+	defer func() { mvResolve = oldResolver }()
+	stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer stale.Close()
+	options, cookie := a.mvQualityOptions(), a.mvCookie()
+	proxy, err := mv.NewProxy(
+		&mv.Resolved{
+			URL: stale.URL, ExpiresAt: time.Now().Add(time.Hour),
+			StreamInfo: mv.StreamInfo{Quality: 80, FPS: 60, Kind: "dash-avc1"},
+		},
+		mvStreamResolver("BVTEST", options, cookie),
+		cookie,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	response, err := http.Get(proxy.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("refresh status %d, body %q, error %v", response.StatusCode, body, err)
+	}
+	if strings.Contains(string(body), "secret-value") || strings.Contains(string(body), "upstream error") {
+		t.Fatalf("proxy response exposed an upstream error: %s", body)
+	}
+	a.mv.key = "bound-track"
+	a.mv.proxy = proxy
+	a.mvFailed("refresh", "network-or-service")
+	diagnostics := a.mvDiagnostics()
+	if strings.Contains(diagnostics, "secret-value") || strings.Contains(diagnostics, "upstream error") ||
+		strings.Contains(diagnostics, "BVTEST") || strings.Contains(diagnostics, "http") {
+		t.Fatalf("diagnostics include private stream details: %s", diagnostics)
+	}
+	if !strings.Contains(diagnostics, "selected resolution: 1080p") || !strings.Contains(diagnostics, "selected fps: 60") {
+		t.Fatalf("diagnostics omitted the selected stream quality: %s", diagnostics)
+	}
+}
+
+// 同一首歌切换偏好后，旧请求迟到失败不能覆盖新请求状态。
+func TestMVDiscardsSupersededLoadResult(t *testing.T) {
+	a := newTestApp()
+	tr := song("mv-epoch", "MV load")
+	tr.Source = "fake"
+	a.pl.Cue([]music.Track{tr})
+	a.mvStore = newTestMVStore(t, tr.Source, tr.ID)
+	ch := posts(a)
+	firstStarted, firstRelease := make(chan struct{}), make(chan struct{})
+	secondStarted, secondRelease := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	oldResolver := mvResolve
+	mvResolve = func(context.Context, string, mv.QualityOptions, string) (*mv.Resolved, error) {
+		switch calls.Add(1) {
+		case 1:
+			close(firstStarted)
+			<-firstRelease
+			return nil, mv.ErrNoCompatibleStream
+		default:
+			close(secondStarted)
+			<-secondRelease
+			return nil, errors.New("new request")
+		}
+	}
+	defer func() { mvResolve = oldResolver }()
+	defer func() {
+		select {
+		case firstRelease <- struct{}{}:
+		default:
+		}
+	}()
+	a.nowPlaying, a.npPane = true, paneMV
+	a.openMV()
+	<-firstStarted
+	a.closeMV()
+	a.openMV()
+	<-secondStarted
+	secondRelease <- struct{}{}
+	runPost(t, ch)
+	if a.mv.err != "network-or-service" || a.mv.failureStage != "resolve" || a.mv.loading {
+		t.Fatalf("new request state %+v", a.mv)
+	}
+	firstRelease <- struct{}{}
+	runPost(t, ch)
+	if a.mv.failureStage != "resolve" || a.mv.err != "network-or-service" {
+		t.Fatalf("late result replaced current request state: %+v", a.mv)
+	}
+}
+
+// 管理菜单复制的 MV 诊断不包含绑定标识或登录凭据。
+func TestMVCopyDiagnosticsMenuOmitsPrivateData(t *testing.T) {
+	a := newTestApp()
+	tr := song("private-track-id", "Private song")
+	tr.Source = "fake"
+	a.pl.Cue([]music.Track{tr})
+	a.mvStore = newTestMVStore(t, tr.Source, tr.ID)
+	a.mv.key = bindingKeyOf(&tr)
+	a.mvCredential = "SESSDATA=private-cookie"
+	a.mv.err, a.mv.failureStage = "synthetic upstream details", "untrusted stage"
+	a.nowPlaying, a.npPane = true, paneMV
+	var copied string
+	oldCopy := copyText
+	copyText = func(value string) error {
+		copied = value
+		return nil
+	}
+	defer func() { copyText = oldCopy }()
+	tester := ui.NewTester(a.view, 880, 650)
+	tester.Move(160, 60)
+	settled(tester)
+	if err := tester.Click(T("Manage MV")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.ChooseMenuItem(T("Copy MV diagnostics")); err != nil {
+		t.Fatal(err)
+	}
+	if copied == "" || strings.Contains(copied, "private-cookie") || strings.Contains(copied, "private-track-id") ||
+		strings.Contains(copied, "Private song") || strings.Contains(copied, "synthetic upstream details") ||
+		strings.Contains(copied, "untrusted stage") {
+		t.Fatalf("copied diagnostics exposed private data: %s", copied)
+	}
+}
+
+// 选择 MV 画质上限后保存实际的质量档位。
+func TestMVQualitySelectionSavesPreference(t *testing.T) {
+	a := newTestApp()
+	a.settingsPage, a.settingsQuery = "playback", "MV Quality Limit"
+	a.settings.path = filepath.Join(t.TempDir(), "settings.json")
+	tester := ui.NewTester(a.settingsView, 900, 700)
+	settled(tester)
+	if err := tester.Click("1080p"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.Click("720p"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	if a.settings.MVQuality != 720 {
+		t.Fatalf("MV quality limit %d, want 720", a.settings.MVQuality)
+	}
+	data, err := os.ReadFile(a.settings.path)
+	if err != nil || !strings.Contains(string(data), `"mvQuality": 720`) {
+		t.Fatalf("saved settings %s, %v", data, err)
 	}
 }
 

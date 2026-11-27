@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -29,13 +30,14 @@ type Doer interface {
 
 // Client 访问 B 站。Cookie 为空时走免登录路径。
 type Client struct {
-	HTTP   Doer
-	Cookie string
-	UA     string
+	HTTP    Doer
+	Cookie  string
+	UA      string
+	Quality QualityOptions
 }
 
 func NewClient() *Client {
-	return &Client{HTTP: &http.Client{Timeout: 20 * time.Second}, UA: defaultUA}
+	return &Client{HTTP: &http.Client{Timeout: 20 * time.Second}, UA: defaultUA, Quality: QualityOptions{Prefer60FPS: true}}
 }
 
 // mixinTab 是 B 站 WBI 签名的固定重排表，用来从 img_key/sub_key 派生 mixin key。
@@ -201,10 +203,7 @@ func parseClock(clock string) time.Duration {
 	return time.Duration(total) * time.Second
 }
 
-// Resolve 把一条 MV 解析成可播放的流。
-//
-// 登录后 DASH 的 H.264 轨能到 1080P；未登录时 DASH 只有 480P，
-// 而渐进式 MP4 有 720P，所以两条路径按登录状态分开选。
+// Resolve 把一条 MV 解析成符合当前画质偏好的可播放流。
 func (c *Client) Resolve(ctx context.Context, videoID string) (*Resolved, error) {
 	referer := "https://www.bilibili.com/video/" + videoID
 	view, err := c.get(ctx, apiBase+"/x/web-interface/view?bvid="+url.QueryEscape(videoID), referer)
@@ -218,22 +217,30 @@ func (c *Client) Resolve(ctx context.Context, videoID string) (*Resolved, error)
 	}
 
 	mix := c.wbi(ctx)
-	loggedIn := c.Cookie != ""
-	// 登录时先试 DASH 的 1080P；未登录直接要渐进式，避免只拿到 480P。
-	fnval := "1"
-	if loggedIn {
-		fnval = "4048"
+	var resolved *Resolved
+	if c.Cookie != "" {
+		qn := c.Quality.requestQN()
+		if play, err := c.playurl(ctx, videoID, int(cid), qn, "4048", mix, referer); err == nil {
+			resolved, _ = chooseStream(play, true, c.Quality, time.Now().Add(resolveTTL))
+		}
 	}
-	play, err := c.playurl(ctx, videoID, int(cid), fnval, mix, referer)
-	if err != nil && loggedIn {
-		play, err = c.playurl(ctx, videoID, int(cid), "1", mix, referer)
-	}
-	if err != nil {
-		return nil, err
-	}
-	resolved, err := chooseStream(play, loggedIn, time.Now().Add(resolveTTL))
-	if err != nil {
-		return nil, err
+	if resolved == nil {
+		// 部分视频不提供请求的 MP4 档位，逐级降档但不超过用户上限。
+		var lastErr error
+		for _, qn := range c.Quality.progressiveQNs() {
+			play, playErr := c.playurl(ctx, videoID, int(cid), qn, "1", mix, referer)
+			if playErr != nil {
+				lastErr = playErr
+				continue
+			}
+			resolved, lastErr = chooseStream(play, false, c.Quality, time.Now().Add(resolveTTL))
+			if resolved != nil {
+				break
+			}
+		}
+		if resolved == nil {
+			return nil, lastErr
+		}
 	}
 	// Referer 是 B 站防盗链的一部分，跟着流一起交给代理。
 	resolved.Referer = referer
@@ -241,24 +248,57 @@ func (c *Client) Resolve(ctx context.Context, videoID string) (*Resolved, error)
 	return resolved, nil
 }
 
-func (c *Client) playurl(ctx context.Context, videoID string, cid int, fnval, mix, referer string) (map[string]any, error) {
+func (o QualityOptions) requestQN() int {
+	switch o.Limit() {
+	case 480:
+		return 32
+	case 720:
+		if o.Prefer60FPS {
+			return 74
+		}
+		return 64
+	}
+	if o.Prefer60FPS {
+		return 116
+	}
+	return 112
+}
+
+func (o QualityOptions) progressiveQNs() []int {
+	switch o.Limit() {
+	case 480:
+		return []int{32, 16}
+	case 720:
+		if o.Prefer60FPS {
+			return []int{74, 64, 32, 16}
+		}
+		return []int{64, 32, 16}
+	default:
+		if o.Prefer60FPS {
+			return []int{116, 112, 80, 74, 64, 32, 16}
+		}
+		return []int{112, 80, 74, 64, 32, 16}
+	}
+}
+
+func (c *Client) playurl(ctx context.Context, videoID string, cid, qn int, fnval, mix, referer string) (map[string]any, error) {
 	params := map[string]string{
 		"bvid":  videoID,
 		"cid":   strconv.Itoa(cid),
-		"qn":    "120",
+		"qn":    strconv.Itoa(qn),
 		"fnval": fnval,
 		"fnver": "0",
-		"fourk": "1",
 		"wts":   strconv.FormatInt(time.Now().Unix(), 10),
 	}
 	endpoint := apiBase + "/x/player/wbi/playurl"
 	if mix != "" {
 		endpoint += "?" + signParams(params, mix)
 	} else {
-		endpoint += "?" + url.Values{
-			"bvid": {videoID}, "cid": {strconv.Itoa(cid)}, "qn": {"120"},
-			"fnval": {fnval}, "fnver": {"0"}, "fourk": {"1"},
-		}.Encode()
+		query := make(url.Values, len(params))
+		for name, value := range params {
+			query.Set(name, value)
+		}
+		endpoint += "?" + query.Encode()
 	}
 	payload, err := c.get(ctx, endpoint, referer)
 	if err != nil {
@@ -271,28 +311,34 @@ func (c *Client) playurl(ctx context.Context, videoID string, cid int, fnval, mi
 	return data, nil
 }
 
+var ErrNoCompatibleStream = errors.New("mv: no compatible H.264 video track")
+
 // chooseStream 是选流策略的纯函数，测试不联网也能覆盖两条路径。
-func chooseStream(data map[string]any, loggedIn bool, expires time.Time) (*Resolved, error) {
+func chooseStream(data map[string]any, preferDASH bool, options QualityOptions, expires time.Time) (*Resolved, error) {
 	var resolved *Resolved
-	if loggedIn {
-		resolved = dashAVC(data, expires)
+	if preferDASH {
+		resolved = dashAVC(data, options, expires)
 	}
 	if resolved == nil {
-		resolved = progressive(data, expires)
+		resolved = progressive(data, options, expires)
 	}
 	// 未登录也可能只有 DASH；总比没有画面好。
-	if resolved == nil {
-		resolved = dashAVC(data, expires)
+	if resolved == nil && !preferDASH {
+		resolved = dashAVC(data, options, expires)
 	}
 	if resolved != nil {
-		resolved.Quality = int(numberOr(data["quality"]))
 		return resolved, nil
 	}
-	return nil, errors.New("mv: no H.264 video track")
+	return nil, ErrNoCompatibleStream
 }
 
-// dashAVC 选 DASH 里最高的 H.264 轨。HEVC/AV1 不选，系统解码器不保证支持。
-func dashAVC(data map[string]any, expires time.Time) *Resolved {
+func (o QualityOptions) accepts(info StreamInfo) bool {
+	resolution := info.Resolution()
+	return info.Quality <= 116 && resolution > 0 && resolution <= o.Limit()
+}
+
+// dashAVC 只选 H.264，先看清晰度，再看同档位的帧率和码率档位。
+func dashAVC(data map[string]any, options QualityOptions, expires time.Time) *Resolved {
 	dash, _ := data["dash"].(map[string]any)
 	if dash == nil {
 		return nil
@@ -305,41 +351,74 @@ func dashAVC(data map[string]any, expires time.Time) *Resolved {
 		if !strings.HasPrefix(codecs, "avc1") {
 			continue
 		}
-		url := firstString(stream["baseUrl"], stream["base_url"])
-		if url == "" {
+		address := firstString(stream["baseUrl"], stream["base_url"])
+		info := StreamInfo{Height: int(numberOr(stream["height"])), Quality: int(numberOr(stream["id"])), Kind: "dash-avc1"}
+		if address == "" || !options.accepts(info) {
 			continue
 		}
-		height := int(numberOr(stream["height"]))
-		if best == nil || height > best.Height {
+		info.FPS = frameRate(stream, info.Quality)
+		if best == nil || options.betterTrack(info, best.StreamInfo) {
 			best = &Resolved{
-				URL:       url,
-				ExpiresAt: expires,
-				Height:    height,
-				Codec:     codecs,
-				Kind:      "dash-avc1",
+				StreamInfo: info,
+				URL:        address,
+				ExpiresAt:  expires,
+				Codec:      codecs,
 			}
 		}
 	}
 	return best
 }
 
+func (o QualityOptions) betterTrack(candidate, current StreamInfo) bool {
+	if candidate.Resolution() != current.Resolution() {
+		return candidate.Resolution() > current.Resolution()
+	}
+	candidateHigh, currentHigh := candidate.FPS >= 55, current.FPS >= 55
+	if candidateHigh != currentHigh {
+		return candidateHigh == o.Prefer60FPS
+	}
+	return candidate.Quality > current.Quality
+}
+
+func frameRate(track map[string]any, quality int) int {
+	for _, key := range []string{"frameRate", "frame_rate"} {
+		fps := numberOr(track[key])
+		if value, ok := track[key].(string); ok {
+			value = strings.TrimSpace(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), "fps"))
+			numerator, denominator, ratio := strings.Cut(value, "/")
+			fps, _ = strconv.ParseFloat(strings.TrimSpace(numerator), 64)
+			if ratio {
+				divisor, _ := strconv.ParseFloat(strings.TrimSpace(denominator), 64)
+				fps /= divisor
+			}
+		}
+		if fps >= 1 && fps <= 240 {
+			return int(math.Round(fps))
+		}
+	}
+	if quality == 74 || quality == 116 {
+		return 60
+	}
+	return 0
+}
+
 // progressive 取 durl 的完整 MP4。多段意味着长视频被切片，播放器不能直接拼，故只接受单段。
-func progressive(data map[string]any, expires time.Time) *Resolved {
+func progressive(data map[string]any, options QualityOptions, expires time.Time) *Resolved {
 	durl, _ := data["durl"].([]any)
 	if len(durl) != 1 {
 		return nil
 	}
 	stream, _ := durl[0].(map[string]any)
-	url := firstString(stream["url"])
-	if url == "" {
+	address := firstString(stream["url"])
+	info := StreamInfo{Quality: int(numberOr(data["quality"])), Kind: "progressive"}
+	if address == "" || !options.accepts(info) {
 		return nil
 	}
+	info.FPS = frameRate(stream, info.Quality)
 	return &Resolved{
-		URL:       url,
-		ExpiresAt: expires,
-		// quality 是 B 站的 qn 编号，不是像素高度，别混用。
-		Height: 0,
-		Kind:   "progressive",
+		StreamInfo: info,
+		URL:        address,
+		ExpiresAt:  expires,
 	}
 }
 

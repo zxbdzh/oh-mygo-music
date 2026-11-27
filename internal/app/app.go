@@ -585,6 +585,7 @@ func Run() error {
 	})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
 		a.quitting = true
+		a.closeMV()
 		a.cancelSleepTimer()
 		a.stopBackgroundTasks()
 		if a.sharing != nil {

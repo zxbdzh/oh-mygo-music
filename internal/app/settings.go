@@ -138,6 +138,8 @@ type settings struct {
 	MVPanX       float64 `json:"mvPanX"`
 	MVPanY       float64 `json:"mvPanY"`
 	MVHideLyrics bool    `json:"mvHideLyrics"`
+	MVQuality    int     `json:"mvQuality"`
+	MV60FPS      bool    `json:"mv60fps"`
 	// AppIcon is where the app's icon shows on macOS (appIcons); elsewhere
 	// it is always in the notification area.
 	AppIcon string `json:"appIcon"`
@@ -156,7 +158,7 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", PromptDownload: true, Appearance: "system", CoverBackdrop: true, CoverBackdropStyle: defaultCoverBackdropStyle(), Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, StageIntensity: "standard", CrossfadeEnabled: true, CrossfadeDurationMs: 5000, PlaybackFadeEnabled: true, PauseFadeOutMs: 180, PlayFadeInMs: 260, MVBackground: true, MVScale: 115, MVBrightness: 100}
+	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", PromptDownload: true, Appearance: "system", CoverBackdrop: true, CoverBackdropStyle: defaultCoverBackdropStyle(), Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, StageIntensity: "standard", CrossfadeEnabled: true, CrossfadeDurationMs: 5000, PlaybackFadeEnabled: true, PauseFadeOutMs: 180, PlayFadeInMs: 260, MVBackground: true, MVScale: 115, MVBrightness: 100, MVQuality: 1080, MV60FPS: true}
 }
 
 type coverBackdropStyle struct {
@@ -209,6 +211,9 @@ func loadSettings() settings {
 			s.MVOverlay = min(60, max(0, s.MVOverlay))
 			s.MVPanX = min(60, max(-60, s.MVPanX))
 			s.MVPanY = min(60, max(-60, s.MVPanY))
+			if s.MVQuality != 480 && s.MVQuality != 720 && s.MVQuality != 1080 {
+				s.MVQuality = 1080
+			}
 			// 旧版布尔联网开关迁移：开过就当作原生的服务商联网增强；
 			// 新字段已有值时以新字段为准，不再覆盖。
 			if s.AIWebSearch && s.AIWebProvider == "" {

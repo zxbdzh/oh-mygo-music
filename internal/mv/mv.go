@@ -35,20 +35,57 @@ func (b Binding) Key() string { return bindingKey(b.Source, b.TrackID) }
 
 func bindingKey(source, trackID string) string { return source + "\x00" + trackID }
 
+// QualityOptions 控制 B 站视频选轨，清晰度优先于同档位的帧率偏好。
+type QualityOptions struct {
+	MaxHeight   int
+	Prefer60FPS bool
+}
+
+func (o QualityOptions) Limit() int {
+	switch o.MaxHeight {
+	case 480, 720:
+		return o.MaxHeight
+	default:
+		return 1080
+	}
+}
+
+// StreamInfo 只保留所选视频轨的属性，可安全用于界面和诊断。
+type StreamInfo struct {
+	Height  int    `json:"height,omitempty"`
+	Quality int    `json:"quality,omitempty"` // B 站 qn 编号
+	FPS     int    `json:"fps,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+}
+
+// Resolution 返回清晰度档位。裁剪过或不同宽高比的片源，像素高度可能和档位不同。
+func (s StreamInfo) Resolution() int {
+	switch s.Quality {
+	case 16:
+		return 360
+	case 32:
+		return 480
+	case 64, 74:
+		return 720
+	case 80, 112, 116:
+		return 1080
+	default:
+		return s.Height
+	}
+}
+
 // Resolved 是一条可以直接交给播放器的流。
 //
 // Cookie 不在这里：登录凭据只存在内存和系统凭据管理器里，
 // 代理转发时由 Client 补上，避免随解析缓存写进磁盘。
 type Resolved struct {
+	StreamInfo
 	URL       string            `json:"url"`
 	Referer   string            `json:"referer"`
 	UA        string            `json:"ua,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
 	ExpiresAt time.Time         `json:"expiresAt"`
-	Height    int               `json:"height,omitempty"`
-	Quality   int               `json:"quality,omitempty"` // B 站 qn：64=720P，80=1080P
 	Codec     string            `json:"codec,omitempty"`
-	Kind      string            `json:"kind,omitempty"` // dash-avc1 或 progressive
 }
 
 // Expired 报告这条流还能不能用；留一分钟余量，避免刚好卡在过期边上。

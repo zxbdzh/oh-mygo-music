@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -18,31 +20,44 @@ import (
 // 只有真的在放 MV 时才持有播放器与代理：解码器会一直占着显存和带宽，
 // 切歌、关闭视图或退出时都要放掉。
 type mvState struct {
-	key       string // 当前播放器的绑定键，Source\0TrackID
-	player    *ui.VideoPlayer
-	frame     *ui.Bitmap // 解码前与无头测试的占位画面
-	proxy     *mv.Proxy
-	err       string
-	loading   bool
-	forceSync bool
-	syncAt    time.Time // 上次硬跳的时间，用来做 1 秒冷却
-	pan       ui.Point
-	panKey    string
-	panSize   ui.Point
+	key          string // 当前播放器的绑定键，Source\0TrackID
+	player       *ui.VideoPlayer
+	frame        *ui.Bitmap // 无头验收的占位画面
+	proxy        *mv.Proxy
+	info         mv.StreamInfo
+	err          string // 只保留错误类别，原始错误可能带直链
+	failureStage string
+	loading      bool
+	forceSync    bool
+	syncAt       time.Time // 上次硬跳的时间，用来做 1 秒冷却
+	epoch        uint64
+	cancel       context.CancelFunc
+	pan          ui.Point
+	panKey       string
+	panSize      ui.Point
 }
 
-// mvShown 决定当前视图要不要显示 MV 背景：
-// 普通歌词与舞台显示，墙、评论、队列、节目页都不显示。
+var mvResolve = func(ctx context.Context, videoID string, options mv.QualityOptions, cookie string) (*mv.Resolved, error) {
+	client := mv.NewClient()
+	client.Cookie, client.Quality = cookie, options
+	return client.Resolve(ctx, videoID)
+}
+
+func mvStreamResolver(videoID string, quality mv.QualityOptions, cookie string) func(context.Context) (*mv.Resolved, error) {
+	resolve := mvResolve
+	return func(ctx context.Context) (*mv.Resolved, error) {
+		return resolve(ctx, videoID, quality, cookie)
+	}
+}
+
+func (a *app) mvQualityOptions() mv.QualityOptions {
+	return mv.QualityOptions{MaxHeight: a.settings.MVQuality, Prefer60FPS: a.settings.MV60FPS}
+}
+
+// mvShown 只在独立 MV 页启用视频，关闭播放页或减少动效时立刻停止加载。
 func (a *app) mvShown(c *ui.Context) bool {
-	if !a.settings.MVBackground || a.pl.Current() == nil || c.Preferences().ReduceMotion {
-		return false
-	}
-	switch a.npPane {
-	case paneMV:
-		return true
-	default:
-		return false
-	}
+	return a.nowPlaying && a.npPane == paneMV && a.settings.MVBackground &&
+		a.pl.Current() != nil && a.pl.Current().ShowID == "" && !c.Preferences().ReduceMotion
 }
 
 // mvFailureLabel 是 MV 加载失败时角落提示的文案；只有当前这首仍保留失败状态时显示。
@@ -53,13 +68,9 @@ func (a *app) mvFailureLabel(tr *music.Track) string {
 	return T("MV couldn't load · Choose another")
 }
 
-// hasBinding 只让已经解出画面的歌改成 MV 正文；加载中仍显示原播放页，
-// 避免绑定后出现一块没有画面的黑底。
-func (st *mvState) hasBinding(tr *music.Track) bool {
-	if st == nil || tr == nil || st.key != bindingKeyOf(tr) {
-		return false
-	}
-	return st.player != nil || st.frame != nil
+// hasPicture 在首帧到达前保留封面和歌词。
+func (st *mvState) hasPicture(tr *music.Track) bool {
+	return tr != nil && st.key == bindingKeyOf(tr) && (st.frame != nil || st.player != nil && st.player.Ready())
 }
 
 // mvSync 让画面跟上音频。
@@ -73,7 +84,7 @@ func (a *app) mvSync(c *ui.Context, tr *music.Track) {
 	}
 	p := st.player
 	if p.Err() != nil {
-		a.mvFailed(st.key, p.Err())
+		a.mvFailed("player", "video-playback-failed")
 		return
 	}
 	if !p.Ready() {
@@ -158,62 +169,127 @@ func (a *app) openMV() {
 	if a.mv.key == key {
 		return
 	}
-	a.closeMV()
+	if a.mv.key != "" {
+		a.closeMV()
+	}
 	binding, ok := a.mvStore.Binding(tr.Source, tr.ID)
 	if !ok {
 		return
 	}
-	a.mv.key, a.mv.loading, a.mv.err, a.mv.forceSync, a.mv.panKey = key, true, "", true, ""
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	a.mv.key, a.mv.loading, a.mv.forceSync, a.mv.cancel = key, true, true, cancel
+	epoch := a.mv.epoch
+	// 初次解析和后续刷新共用本轮设置，登录切换或画质变更会重建这一轮。
+	cookie, quality := a.mvCookie(), a.mvQualityOptions()
+	resolve := mvStreamResolver(binding.VideoID, quality, cookie)
 
-	// 解析和启动代理都在后台；视图线程只收结果。
+	// 先解析，主线程确认请求仍有效后再创建代理和播放器。
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		client := mv.NewClient()
-		client.Cookie = a.mvCookie()
-		if _, err := client.Resolve(ctx, binding.VideoID); err != nil {
-			a.post(func() { a.mvFailed(key, err) })
-			return
-		}
-		videoID := binding.VideoID
-		proxy, err := mv.NewProxy(func(ctx context.Context) (*mv.Resolved, error) {
-			// 直链过期时重新解析；登录态在请求时再取，退出登录立即生效。
-			fresh := mv.NewClient()
-			fresh.Cookie = a.mvCookie()
-			return fresh.Resolve(ctx, videoID)
-		}, a.mvCookie)
-		if err != nil {
-			a.post(func() { a.mvFailed(key, err) })
-			return
-		}
-		a.post(func() { a.mvReady(key, proxy) })
+		resolved, err := resolve(ctx)
+		a.post(func() {
+			// 只比较歌曲键会让同一首歌的旧画质结果覆盖新结果。
+			current := a.pl.Current()
+			if a.quitting || a.mv.epoch != epoch || !a.nowPlaying || a.npPane != paneMV ||
+				current == nil || bindingKeyOf(current) != key {
+				return
+			}
+			a.mv.cancel = nil
+			if err != nil {
+				kind := "network-or-service"
+				switch {
+				case errors.Is(err, mv.ErrNoCompatibleStream):
+					kind = "unsupported-stream"
+				case errors.Is(err, context.DeadlineExceeded):
+					kind = "timeout"
+				}
+				a.mvFailed("resolve", kind)
+				return
+			}
+			a.mvReady(resolved, resolve, cookie)
+		})
 	}()
 }
 
 // mvReady 在主线程上接住解析结果，打开播放器。
-func (a *app) mvReady(key string, proxy *mv.Proxy) {
-	// 切歌发生在解析途中：放掉这次结果，别让它盖掉新歌。
-	if a.mv.key != key {
-		proxy.Close()
+func (a *app) mvReady(resolved *mv.Resolved, resolve func(context.Context) (*mv.Resolved, error), cookie string) {
+	a.mv.info = resolved.StreamInfo
+	proxy, err := mv.NewProxy(resolved, resolve, cookie)
+	if err != nil {
+		a.mvFailed("proxy", "local-proxy-unavailable")
 		return
 	}
+	a.mv.proxy = proxy
 	player, err := video.OpenURL(proxy.URL())
 	if err != nil {
-		proxy.Close()
-		a.mvFailed(key, err)
+		a.mvFailed("player", "decoder-open-failed")
 		return
 	}
 	player.SetMuted(true).SetLoop(true)
-	a.mv.player, a.mv.proxy = player, proxy
-	a.mv.loading, a.mv.err = false, ""
+	a.mv.player, a.mv.loading = player, false
 }
 
-func (a *app) mvFailed(key string, err error) {
-	if a.mv.key != key {
-		return
-	}
+func (a *app) mvFailed(stage, kind string) {
+	a.mv.info = a.mv.streamInfo()
 	a.releaseMV()
-	a.mv.loading, a.mv.err = false, err.Error()
+	a.mv.loading, a.mv.failureStage, a.mv.err = false, stage, kind
+}
+
+func (st *mvState) streamInfo() mv.StreamInfo {
+	if st.proxy != nil {
+		return st.proxy.StreamInfo()
+	}
+	return st.info
+}
+
+// mvDiagnostics 仅包含播放阶段与轨道档位，不复制链接、标题、账号或原始错误。
+func (a *app) mvDiagnostics() string {
+	stage := "idle"
+	switch {
+	case a.mv.err != "":
+		switch a.mv.failureStage {
+		case "resolve", "refresh", "proxy", "player":
+			stage = a.mv.failureStage
+		default:
+			stage = "playback"
+		}
+	case a.mv.loading:
+		stage = "resolving"
+	case a.mv.player != nil && a.mv.player.Err() != nil:
+		stage = "player-error"
+	case a.mv.player != nil && a.mv.player.Buffering():
+		stage = "buffering"
+	case a.mv.player != nil && !a.mv.player.Ready():
+		stage = "waiting-for-frame"
+	case a.mv.player != nil && a.mv.player.Playing():
+		stage = "playing"
+	case a.mv.player != nil || a.mv.frame != nil:
+		stage = "paused"
+	}
+	failure := ""
+	switch a.mv.err {
+	case "unsupported-stream", "timeout", "network-or-service", "local-proxy-unavailable", "decoder-open-failed", "video-playback-failed":
+		failure = a.mv.err
+	case "":
+	default:
+		failure = "other"
+	}
+	info := a.mv.streamInfo()
+	kind := "unknown"
+	switch info.Kind {
+	case "dash-avc1", "progressive":
+		kind = info.Kind
+	}
+	resolution := "unknown"
+	if pixels := info.Resolution(); pixels > 0 {
+		resolution = fmt.Sprintf("%dp", pixels)
+	}
+	fps := "unknown"
+	if info.FPS > 0 {
+		fps = fmt.Sprintf("%d", info.FPS)
+	}
+	return fmt.Sprintf("MV stage: %s\nfailure: %s\nquality limit: %dp\nprefer 60 fps: %t\nselected resolution: %s\nselected fps: %s\nstream type: %s",
+		stage, failure, a.mvQualityOptions().Limit(), a.settings.MV60FPS, resolution, fps, kind)
 }
 
 // releaseMV 只释放解码器与代理，保留失败状态或当前绑定键供界面提示。
@@ -230,8 +306,11 @@ func (a *app) releaseMV() {
 
 // closeMV 释放播放器与代理，并清空这首的失败状态。切歌、关闭视图、退出时调用。
 func (a *app) closeMV() {
+	if a.mv.cancel != nil {
+		a.mv.cancel()
+	}
 	a.releaseMV()
-	a.mv = mvState{}
+	a.mv = mvState{epoch: a.mv.epoch + 1}
 }
 
 // ensureMVStore 第一次需要时读取绑定与缓存；失败不阻塞播放。
@@ -241,12 +320,10 @@ func (a *app) ensureMVStore() {
 	}
 	path, err := mvStorePath()
 	if err != nil {
-		a.mv.err = err.Error()
 		return
 	}
 	store, err := mv.Open(path)
 	if err != nil {
-		a.mv.err = err.Error()
 		return
 	}
 	a.mvStore = store
@@ -264,5 +341,5 @@ func bindingKeyOf(tr *music.Track) string {
 	return tr.Source + "\x00" + tr.ID
 }
 
-// mvCookie 返回 B 站登录态。首版还没有登录界面，之后接系统凭据管理器。
+// mvCookie 返回主线程持有的 B 站登录凭据。
 func (a *app) mvCookie() string { return a.mvCredential }

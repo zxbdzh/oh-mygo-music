@@ -45,10 +45,22 @@ func (a *app) mvButton(c *ui.Context, tr *music.Track) {
 		binding, bound = a.mvStore.Binding(tr.Source, tr.ID)
 	}
 	label := T("Choose MV")
+	accessLabel := label
 	if bound {
 		label = T("Manage MV")
+		accessLabel = label
+		if a.mvShown(c) && a.mv.hasPicture(tr) {
+			info := a.mv.streamInfo()
+			if resolution := info.Resolution(); resolution > 0 {
+				label = Tf("%dp", resolution)
+				if info.FPS > 0 {
+					label = Tf("%dp · %d fps", resolution, info.FPS)
+				}
+				accessLabel = Tf("Manage MV: %s", label)
+			}
+		}
 	}
-	button := pillButton(c.Key("mv-open"), iconVideo, label, ui.RGBA(8, 11, 16, 0.45), white.Alpha(0.9)).Height(30).Label(label)
+	button := pillButton(c.Key("mv-open"), iconVideo, label, ui.RGBA(8, 11, 16, 0.45), white.Alpha(0.9)).Height(30).Label(accessLabel).Tooltip(accessLabel)
 	if !bound {
 		if button.Clicked() {
 			a.openMVDialog(tr)
@@ -83,6 +95,14 @@ func (a *app) mvButton(c *ui.Context, tr *music.Track) {
 				a.toast = T("Couldn't save the MV.")
 			} else {
 				a.closeMV()
+			}
+		}
+		menu.Separator()
+		if menu.Item(T("Copy MV diagnostics")).Chosen() {
+			if err := copyText(a.mvDiagnostics()); err != nil {
+				a.toast = T("Could not copy MV diagnostics")
+			} else {
+				a.toast = T("Copied MV diagnostics")
 			}
 		}
 	})

@@ -43,9 +43,9 @@ func TestLiveSearchResolveAndProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	parsed, _ := url.Parse(resolved.URL)
-	t.Logf("resolved: kind=%s quality=%d height=%d host=%s", resolved.Kind, resolved.Quality, resolved.Height, parsed.Host)
+	t.Logf("resolved: kind=%s quality=%d resolution=%d height=%d fps=%d host=%s", resolved.Kind, resolved.Quality, resolved.Resolution(), resolved.Height, resolved.FPS, parsed.Host)
 
-	proxy, err := NewProxy(func(context.Context) (*Resolved, error) { return resolved, nil }, func() string { return "" })
+	proxy, err := NewProxy(resolved, func(context.Context) (*Resolved, error) { return resolved, nil }, client.Cookie)
 	if err != nil {
 		t.Fatal(err)
 	}

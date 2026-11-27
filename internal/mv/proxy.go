@@ -19,7 +19,7 @@ import (
 // 而 B 站直链缺了这些会 403，所以必须由这里代发并原样透传 Range。
 type Proxy struct {
 	resolve func(context.Context) (*Resolved, error)
-	cookie  func() string
+	cookie  string
 	client  *http.Client
 
 	token    string
@@ -31,9 +31,8 @@ type Proxy struct {
 	current *Resolved
 }
 
-// NewProxy 在 127.0.0.1 的随机端口上启动代理。resolve 返回 null 时请求 502。
-// cookie 每次请求时取，退出登录后立即生效，也不落进磁盘缓存。
-func NewProxy(resolve func(context.Context) (*Resolved, error), cookie func() string) (*Proxy, error) {
+// NewProxy 在 127.0.0.1 的随机端口上启动代理，使用本次播放的登录态。
+func NewProxy(initial *Resolved, resolve func(context.Context) (*Resolved, error), cookie string) (*Proxy, error) {
 	if resolve == nil {
 		return nil, errors.New("mv: proxy needs resolve")
 	}
@@ -51,6 +50,7 @@ func NewProxy(resolve func(context.Context) (*Resolved, error), cookie func() st
 		client:   &http.Client{Timeout: 30 * time.Second},
 		token:    token,
 		listener: listener,
+		current:  initial,
 	}
 	// 路径里带随机 token：别的本机程序不能借这个代理顺手用上登录态。
 	p.url = "http://" + listener.Addr().String() + "/mv/" + token
@@ -62,11 +62,17 @@ func NewProxy(resolve func(context.Context) (*Resolved, error), cookie func() st
 // URL 是给播放器的地址，可直接交给 ui/video.OpenURL。
 func (p *Proxy) URL() string { return p.url }
 
-func (p *Proxy) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	return p.server.Shutdown(ctx)
+// StreamInfo 报告代理当前使用的轨道，供实际画质显示和故障诊断。
+func (p *Proxy) StreamInfo() StreamInfo {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.current == nil {
+		return StreamInfo{}
+	}
+	return p.current.StreamInfo
 }
+
+func (p *Proxy) Close() error { return p.server.Close() }
 
 func randomToken() (string, error) {
 	b := make([]byte, 16)
@@ -88,7 +94,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	stream, err := p.stream(r.Context(), false)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, "MV stream unavailable", http.StatusBadGateway)
 		return
 	}
 	if err := p.forward(w, r, stream); err == nil {
@@ -97,11 +103,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 直链过期和瞬时网络错误都走这里：重新解析一次再试，仍失败才交给播放器 502。
 	stream, err = p.stream(r.Context(), true)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, "MV stream unavailable", http.StatusBadGateway)
 		return
 	}
 	if err := p.forward(w, r, stream); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, "MV stream unavailable", http.StatusBadGateway)
 	}
 }
 
@@ -115,6 +121,9 @@ func (p *Proxy) stream(ctx context.Context, force bool) (*Resolved, error) {
 	stream, err := p.resolve(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if stream == nil {
+		return nil, ErrNoCompatibleStream
 	}
 	p.mu.Lock()
 	p.current = stream
@@ -134,8 +143,8 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, stream *Resolved
 	for k, v := range stream.Headers {
 		req.Header.Set(k, v)
 	}
-	if c := p.cookie(); c != "" {
-		req.Header.Set("Cookie", c)
+	if p.cookie != "" {
+		req.Header.Set("Cookie", p.cookie)
 	}
 	if rg := r.Header.Get("Range"); rg != "" {
 		req.Header.Set("Range", rg)

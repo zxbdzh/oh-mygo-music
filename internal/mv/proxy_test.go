@@ -23,9 +23,9 @@ func TestProxyForwardsRangeAndHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	proxy, err := NewProxy(func(context.Context) (*Resolved, error) {
+	proxy, err := NewProxy(nil, func(context.Context) (*Resolved, error) {
 		return &Resolved{URL: upstream.URL, Referer: "https://www.bilibili.com/video/BV1", UA: "test-ua", ExpiresAt: time.Now().Add(time.Hour)}, nil
-	}, func() string { return "SESSDATA=x" })
+	}, "SESSDATA=x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +51,7 @@ func TestProxyForwardsRangeAndHeaders(t *testing.T) {
 	}
 }
 
+// 首次访问直接使用已解析的流，403 刷新一次并更新实际轨道信息。
 func TestProxyRefreshesOnceOnForbidden(t *testing.T) {
 	stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expired", http.StatusForbidden)
@@ -63,12 +64,11 @@ func TestProxyRefreshesOnceOnForbidden(t *testing.T) {
 	defer fresh.Close()
 
 	var calls atomic.Int32
-	proxy, err := NewProxy(func(context.Context) (*Resolved, error) {
-		if calls.Add(1) == 1 {
-			return &Resolved{URL: stale.URL, ExpiresAt: time.Now().Add(time.Hour)}, nil
-		}
-		return &Resolved{URL: fresh.URL, ExpiresAt: time.Now().Add(time.Hour)}, nil
-	}, func() string { return "" })
+	initial := &Resolved{URL: stale.URL, StreamInfo: StreamInfo{Quality: 80}, ExpiresAt: time.Now().Add(time.Hour)}
+	proxy, err := NewProxy(initial, func(context.Context) (*Resolved, error) {
+		calls.Add(1)
+		return &Resolved{URL: fresh.URL, StreamInfo: StreamInfo{Quality: 64}, ExpiresAt: time.Now().Add(time.Hour)}, nil
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,8 +83,11 @@ func TestProxyRefreshesOnceOnForbidden(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || string(body) != "fresh" {
 		t.Fatalf("status %d body %q", resp.StatusCode, body)
 	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("resolve called %d times, want 2", got)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("resolve called %d times, want 1", got)
+	}
+	if got := proxy.StreamInfo().Resolution(); got != 720 {
+		t.Fatalf("reported resolution %d, want 720", got)
 	}
 }
 
@@ -95,9 +98,9 @@ func TestProxyNormalizesVideoContentType(t *testing.T) {
 		io.WriteString(w, "data")
 	}))
 	defer upstream.Close()
-	proxy, err := NewProxy(func(context.Context) (*Resolved, error) {
+	proxy, err := NewProxy(nil, func(context.Context) (*Resolved, error) {
 		return &Resolved{URL: upstream.URL, ExpiresAt: time.Now().Add(time.Hour)}, nil
-	}, func() string { return "" })
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,9 +116,9 @@ func TestProxyNormalizesVideoContentType(t *testing.T) {
 }
 
 func TestProxyRejectsUnknownPath(t *testing.T) {
-	proxy, err := NewProxy(func(context.Context) (*Resolved, error) {
+	proxy, err := NewProxy(nil, func(context.Context) (*Resolved, error) {
 		return &Resolved{URL: "http://127.0.0.1:1", ExpiresAt: time.Now().Add(time.Hour)}, nil
-	}, func() string { return "" })
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
