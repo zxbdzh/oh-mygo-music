@@ -462,6 +462,18 @@ func TestAIFrames(t *testing.T) {
 	evView := ui.NewTester(ev.view, 1200, 800)
 	settled(evView)
 	saveFrame(t, dir, "ai-evidence.png", evView.Image())
+
+	// 封面页打开时推荐条仍要可见：浏览页此时整个不绘制。
+	np := newTestApp()
+	np.pl.Cue([]music.Track{song("1", "夜曲", "周杰伦")})
+	np.nowPlaying = true
+	np.aiBar = aiBarState{open: true, stage: aiBarDone, lib: np.library,
+		track: song("1", "夜曲", "周杰伦"), pick: ai.Suggestion{
+			PlaylistID: "10", Confidence: 0.9, Reason: "适合通勤",
+		}, name: "通勤"}
+	npView := ui.NewTester(np.view, 1200, 800)
+	settled(npView)
+	saveFrame(t, dir, "ai-bar-on-now-playing.png", npView.Image())
 }
 
 // fakeSearchProvider 是无头测试里的联网桩，只返回预设结果或错误。

@@ -554,15 +554,31 @@ func (a *app) closeSuggestion() {
 	a.redraw()
 }
 
+// aiSuggestOverlay draws the suggestion and its evidence above everything,
+// including Now Playing, which hides the whole browse page. 封面页没有侧边栏
+// 也没有播放条，两者都贴窗口边。
+func (a *app) aiSuggestOverlay(c *ui.Context, onNowPlaying bool) {
+	if !a.aiBar.open {
+		return
+	}
+	left := float32(sidebarWidth + 16)
+	bottom := float32(playerBarHeight + 4)
+	if onNowPlaying {
+		left, bottom = 16, 24
+	}
+	a.evidencePanel(c, a.pal, left, bottom)
+	a.suggestionBar(c, a.pal, left, bottom)
+}
+
 // evidencePanel is the expandable source list above the bar: each hit is a
 // link the listener can open to check what the model actually read.
-func (a *app) evidencePanel(c *ui.Context, p palette, bottom float32) {
+func (a *app) evidencePanel(c *ui.Context, p palette, left, bottom float32) {
 	b := &a.aiBar
 	if !b.open || !b.evidenceOpen || !b.settled() {
 		return
 	}
 	g := shellGlass(p.dark, 0.48, 0.52)
-	panel := ui.Column(c.Key("ai-evidence")).Absolute().Left(16).Right(16).Bottom(bottom + 64).
+	panel := ui.Column(c.Key("ai-evidence")).Absolute().Left(left).Right(16).Bottom(bottom + 64).
 		Padding(14).Gap(6).Radius(16).
 		// 依据面板压在最前台，玻璃调得更实，避免透出下面的播放条显脏。
 		Material(glass.Glass{Style: glass.Regular, Clarity: 0.88, Tint: g.tint}).
@@ -593,14 +609,14 @@ func (a *app) evidencePanel(c *ui.Context, p palette, bottom float32) {
 
 // suggestionBar is the suggestion after a like: it stays above the player,
 // with adding it, adjusting it, or closing it.
-func (a *app) suggestionBar(c *ui.Context, p palette, bottom float32) {
+func (a *app) suggestionBar(c *ui.Context, p palette, left, bottom float32) {
 	b := &a.aiBar
 	if !b.open {
 		return
 	}
 	// 与底部播放胶囊同款玻璃：推荐条悬浮在内容之上，实心底色会在封面氛围下突兀。
 	g := shellGlass(p.dark, 0.48, 0.52)
-	bar := ui.Row(c.Key("ai-suggestion-bar")).Absolute().Left(16).Right(16).Bottom(bottom).Height(56).
+	bar := ui.Row(c.Key("ai-suggestion-bar")).Absolute().Left(left).Right(16).Bottom(bottom).Height(56).
 		PaddingX(16).Gap(12).AlignItems(ui.Center).Radius(20).
 		// 与播放条同款玻璃，但更实：它在最前台，下面就是播放条。
 		Material(glass.Glass{Style: glass.Regular, Clarity: 0.88, Tint: g.tint}).
