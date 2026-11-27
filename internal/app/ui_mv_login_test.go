@@ -1,8 +1,12 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 
 	"mygo-music/internal/credential"
 	"mygo-music/internal/mv"
@@ -74,5 +78,67 @@ func TestMVLoginKeepsSessionWhenCredentialStoreFails(t *testing.T) {
 	}
 	if a.toast != T("Signed in for this session only.") {
 		t.Fatalf("toast %q", a.toast)
+	}
+}
+
+// 设置页能直接展开登录，二维码与 Cookie 输入都在设置窗口里。
+func TestMVLoginInlineFromSettings(t *testing.T) {
+	previous := credential.System
+	credential.System = &memoryCredentialStore{values: map[string]string{}}
+	defer func() { credential.System = previous }()
+	old := mvLoginQRCode
+	mvLoginQRCode = func(context.Context) (*mv.LoginQR, error) {
+		return &mv.LoginQR{URL: "https://example.test/qr", Key: "key"}, nil
+	}
+	defer func() { mvLoginQRCode = old }()
+
+	a := newTestApp()
+	ch := posts(a)
+	a.settingsPage = "playback"
+	a.settingsQuery = strings.ToLower(T("Bilibili Account"))
+	tester := ui.NewTester(a.settingsView, 900, 800)
+	settled(tester)
+	if err := tester.Click(T("Sign In")); err != nil {
+		t.Fatal(err)
+	}
+	runPost(t, ch)
+	tester.Frame()
+	if !a.mvLogin.open || !a.mvLogin.inline || a.mvLogin.qrCode == nil {
+		t.Fatalf("inline login state %+v", a.mvLogin)
+	}
+	if _, ok := tester.Find(T("Use Cookie")); !ok {
+		t.Fatal("cookie input missing from the settings login")
+	}
+	if err := tester.Click(T("Done")); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	if a.mvLogin.open || a.mvLogin.inline {
+		t.Fatalf("inline login stayed open: %+v", a.mvLogin)
+	}
+}
+
+// 已登录时设置页显示账号名，并能直接退出。
+func TestMVAccountRowInSettings(t *testing.T) {
+	previous := credential.System
+	credential.System = &memoryCredentialStore{values: map[string]string{}}
+	defer func() { credential.System = previous }()
+
+	a := newTestApp()
+	a.saveMVLogin("SESSDATA=synthetic", mv.Account{Name: "Listener"})
+	a.toast = ""
+	a.settingsPage = "playback"
+	a.settingsQuery = strings.ToLower(T("Bilibili Account"))
+	tester := ui.NewTester(a.settingsView, 900, 800)
+	settled(tester)
+	if _, ok := tester.Find(Tf("Signed in as %s", "Listener")); !ok {
+		t.Fatal("account name missing from the settings")
+	}
+	if err := tester.Click(T("Sign Out")); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	if a.mvCredential != "" || a.mvAccount != "" {
+		t.Fatalf("sign out left %q / %q", a.mvCredential, a.mvAccount)
 	}
 }

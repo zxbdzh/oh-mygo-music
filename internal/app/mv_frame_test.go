@@ -2,6 +2,7 @@ package app
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +76,25 @@ func TestMVSettingsFrame(t *testing.T) {
 	tester.SetDark(true)
 	settled(tester)
 	saveFrame(t, dir, "mv-settings.png", tester.Image())
+}
+
+// 设置 MM_FRAMES 后保存 MV 设置里的账号行与内联登录，供目视核对。
+func TestMVAccountSettingsFrame(t *testing.T) {
+	dir := framesDir(t)
+	defer i18n.SetLanguage(i18n.English)
+	i18n.SetLanguage(i18n.Chinese)
+	a := newTestApp()
+	a.settingsPage = "playback"
+	a.settingsQuery = strings.ToLower(T("Bilibili Account"))
+	code, err := qr.Encode("https://example.test/bilibili-login", qr.M)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.mvLogin = mvLoginState{open: true, inline: true, status: T("Scan with Bilibili."), qrCode: code}
+	tester := ui.NewTester(a.settingsView, 900, 850)
+	tester.SetDark(true)
+	settled(tester)
+	saveFrame(t, dir, "mv-account-settings.png", tester.Image())
 }
 
 // 设置 MM_FRAMES 后保存 MV 搜索面板，供目视核对候选与搜索框。

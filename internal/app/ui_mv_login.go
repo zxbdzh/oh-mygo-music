@@ -13,6 +13,7 @@ import (
 
 type mvLoginState struct {
 	open    bool
+	inline  bool // 设置页内联展开，不再占用主窗口的弹窗
 	busy    bool
 	status  string
 	err     string
@@ -24,6 +25,17 @@ type mvLoginState struct {
 }
 
 func (a *app) openMVLogin() {
+	a.mvLogin.inline = false
+	a.beginMVLogin()
+}
+
+// openMVLoginInline 在设置页展开登录内容；设置是独立窗口，主窗口的弹窗在那里看不到。
+func (a *app) openMVLoginInline() {
+	a.mvLogin.inline = true
+	a.beginMVLogin()
+}
+
+func (a *app) beginMVLogin() {
 	d := &a.mvLogin
 	d.open, d.busy, d.err, d.cookie = true, false, "", ""
 	if a.mvCredential != "" {
@@ -34,6 +46,11 @@ func (a *app) openMVLogin() {
 		return
 	}
 	a.startMVQR()
+}
+
+// mvLoginQRCode 是二维码生成的测试替换点。
+var mvLoginQRCode = func(ctx context.Context) (*mv.LoginQR, error) {
+	return mv.NewClient().LoginQRCode(ctx)
 }
 
 // refreshMVAccount 只用来把已保存的 Cookie 换成显示名；失败不影响播放。
@@ -72,7 +89,7 @@ func (a *app) startMVQR() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		login, err := mv.NewClient().LoginQRCode(ctx)
+		login, err := mvLoginQRCode(ctx)
 		a.post(func() {
 			if epoch != d.epoch || !d.open {
 				return
@@ -197,6 +214,10 @@ func (a *app) signOutMV() {
 }
 
 func (a *app) mvLoginDialog(c *ui.Context) {
+	// 内联模式由设置页绘制，主窗口不再弹一份。
+	if a.mvLogin.inline {
+		return
+	}
 	p := a.pal
 	d := &a.mvLogin
 	ui.DialogBase(c.Key("mv-login"), &d.open, func(backdrop, panel ui.Element) {
@@ -207,57 +228,62 @@ func (a *app) mvLoginDialog(c *ui.Context) {
 		panel.Children(func() {
 			ui.Column(c).Gap(10).Children(func() {
 				ui.Text(c, T("Bilibili Account")).FontSize(17).FontWeight(700)
-				if a.mvCredential != "" {
-					name := a.mvAccount
-					if name == "" {
-						ui.Text(c, T("Bilibili signed in.")).FontSize(13).TextColor(p.muted)
-					} else {
-						ui.Text(c, Tf("Signed in as %s", name)).FontSize(13).TextColor(p.muted)
-					}
-					ui.Row(c).Gap(10).Justify(ui.End).Children(func() {
-						if pillButton(c.Key("mv-login-out"), nil, T("Sign Out"), p.hover.Over(p.bg), p.text).Clicked() {
-							a.signOutMV()
-						}
-						if pillButton(c.Key("mv-login-close"), nil, T("Close"), p.hover.Over(p.bg), p.text).Clicked() {
-							d.open = false
-						}
-					})
-					return
-				}
-				if d.err != "" {
-					ui.Text(c, d.err).FontSize(12).TextColor(p.muted)
-				} else if d.status != "" {
-					ui.Text(c, d.status).FontSize(12).TextColor(p.muted)
-				}
-				if code := d.qrCode; code != nil {
-					ui.Row(c).Justify(ui.Center).Children(func() {
-						ui.Box(c).Size(192, 192).Radius(12).Background(ui.Hex("#ffffff")).
-							Draw(func(pt *ui.Painter, r ui.Rect) { drawQR(pt, r, code, 12) })
-					})
-				}
-				ui.Row(c).Justify(ui.Center).Children(func() {
-					if pillButton(c.Key("mv-login-refresh"), nil, T("Refresh QR"), p.hover.Over(p.bg), p.text).Clicked() {
-						a.startMVQR()
-					}
-				})
-				ui.Box(c).Height(1).Background(p.hairline)
-				input := ui.TextInput(c.Key("mv-login-cookie"), &d.cookie).
-					Password().Label(T("Bilibili Cookie")).Placeholder(T("SESSDATA=...")).FontSize(12)
-				if input.Submitted() {
-					a.finishMVLogin(d.cookie)
-				}
-				ui.Row(c).Gap(10).Justify(ui.End).Children(func() {
-					if pillButton(c.Key("mv-login-cookie-ok"), nil, T("Use Cookie"), p.accent, p.onAccent).Clicked() {
-						a.finishMVLogin(d.cookie)
-					}
-					if pillButton(c.Key("mv-login-cancel"), nil, T("Close"), p.hover.Over(p.bg), p.text).Clicked() {
-						if d.cancel != nil {
-							d.cancel()
-						}
-						d.open = false
-					}
-				})
+				a.mvLoginBody(c, p, T("Close"), func() { d.open = false })
 			})
 		})
+	})
+}
+
+// mvLoginBody 是登录内容，主窗口弹窗和设置页内联共用同一份状态。
+func (a *app) mvLoginBody(c *ui.Context, p palette, closeLabel string, close func()) {
+	d := &a.mvLogin
+	if a.mvCredential != "" {
+		if a.mvAccount != "" {
+			ui.Text(c, Tf("Signed in as %s", a.mvAccount)).FontSize(13).TextColor(p.muted)
+		} else {
+			ui.Text(c, T("Bilibili signed in.")).FontSize(13).TextColor(p.muted)
+		}
+		ui.Row(c).Gap(10).Justify(ui.End).Children(func() {
+			if pillButton(c.Key("mv-login-out"), nil, T("Sign Out"), p.hover.Over(p.bg), p.text).Clicked() {
+				a.signOutMV()
+			}
+			if pillButton(c.Key("mv-login-close"), nil, closeLabel, p.hover.Over(p.bg), p.text).Clicked() {
+				close()
+			}
+		})
+		return
+	}
+	if d.err != "" {
+		ui.Text(c, d.err).FontSize(12).TextColor(p.muted)
+	} else if d.status != "" {
+		ui.Text(c, d.status).FontSize(12).TextColor(p.muted)
+	}
+	if code := d.qrCode; code != nil {
+		ui.Row(c).Justify(ui.Center).Children(func() {
+			ui.Box(c).Size(192, 192).Radius(12).Background(ui.Hex("#ffffff")).
+				Draw(func(pt *ui.Painter, r ui.Rect) { drawQR(pt, r, code, 12) })
+		})
+	}
+	ui.Row(c).Justify(ui.Center).Children(func() {
+		if pillButton(c.Key("mv-login-refresh"), nil, T("Refresh QR"), p.hover.Over(p.bg), p.text).Clicked() {
+			a.startMVQR()
+		}
+	})
+	ui.Box(c).Height(1).Background(p.hairline)
+	input := ui.TextInput(c.Key("mv-login-cookie"), &d.cookie).
+		Password().Label(T("Bilibili Cookie")).Placeholder(T("SESSDATA=...")).FontSize(12)
+	if input.Submitted() {
+		a.finishMVLogin(d.cookie)
+	}
+	ui.Row(c).Gap(10).Justify(ui.End).Children(func() {
+		if pillButton(c.Key("mv-login-cookie-ok"), nil, T("Use Cookie"), p.accent, p.onAccent).Clicked() {
+			a.finishMVLogin(d.cookie)
+		}
+		if pillButton(c.Key("mv-login-cancel"), nil, closeLabel, p.hover.Over(p.bg), p.text).Clicked() {
+			if d.cancel != nil {
+				d.cancel()
+			}
+			close()
+		}
 	})
 }

@@ -731,6 +731,35 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 				a.changed()
 			}
 		})
+		account := T("Sign in to get higher quality MV streams.")
+		if a.mvCredential != "" {
+			account = T("Signed in.")
+			if a.mvAccount != "" {
+				account = Tf("Signed in as %s", a.mvAccount)
+			}
+		}
+		row(T("Bilibili Account"), account, func() {
+			if a.mvCredential != "" {
+				if pillButton(c.Key("mv-account-out"), nil, T("Sign Out"), p.hover.Over(p.bg), p.text).Clicked() {
+					a.signOutMV()
+				}
+				return
+			}
+			if pillButton(c.Key("mv-account-in"), nil, T("Sign In"), p.accent, p.onAccent).Clicked() {
+				a.openMVLoginInline()
+			}
+		})
+		// 设置是独立窗口，登录内容在分组里展开，主窗口的弹窗看不到这里。
+		block(T("Bilibili Account"), func() {
+			if !a.mvLogin.open || !a.mvLogin.inline {
+				return
+			}
+			ui.Column(c).Padding(12, 16).Gap(10).Children(func() {
+				a.mvLoginBody(c, p, T("Done"), func() {
+					a.mvLogin.open, a.mvLogin.inline = false, false
+				})
+			})
+		})
 		row(T("MV Quality Limit"), T("Actual quality depends on the video and your sign-in status."), func() {
 			levels := []int{480, 720, 1080}
 			labels := []string{"480p", "720p", "1080p"}
