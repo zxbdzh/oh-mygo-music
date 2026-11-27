@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +24,8 @@ var (
 	getAISecret = func(key string) ([]byte, error) { return mygo.Secrets.Get(key) }
 	setAISecret = func(key string, value []byte) error { return mygo.Secrets.Set(key, value) }
 	newAIClient = ai.NewClient
+	// newWebProvider 让无头测试换成桩搜索，不需要真实 API Key。
+	newWebProvider = websearch.For
 )
 
 type aiSuggestionState struct {
@@ -35,6 +38,17 @@ type aiSuggestionState struct {
 	name   string
 }
 
+// aiBarStage is where the auto suggestion is: searching the web, asking the
+// model, or done. 阶段单独存，界面才能显示进度而不是只给一个结论。
+type aiBarStage int
+
+const (
+	aiBarIdle aiBarStage = iota
+	aiBarSearching
+	aiBarThinking
+	aiBarDone
+)
+
 // aiBarState is the suggestion after a like, which stays until the listener
 // adds it, adjusts it, or closes it.
 type aiBarState struct {
@@ -45,6 +59,10 @@ type aiBarState struct {
 	lib    *library
 	pick   ai.Suggestion
 	name   string
+	// stage 是联网与判断的进度；sources 是搜到的网页，供"依据"面板核实。
+	stage        aiBarStage
+	sources      []websearch.Result
+	evidenceOpen bool
 }
 
 // aiRefineState is the conversation that talks a suggestion into another
@@ -143,7 +161,7 @@ func (a *app) aiWebProvider() websearch.Provider {
 	if b, err := getAISecret("ai-web-key-" + name); err == nil {
 		key = string(b)
 	}
-	return websearch.For(name, key)
+	return newWebProvider(name, key)
 }
 
 // aiWebContext searches the web for the song's identity before the
@@ -399,8 +417,28 @@ func (a *app) testAIConnection() {
 	}()
 }
 
-// autoSuggestPlaylist asks for a suggestion after the source confirmed a like,
-// using only the playlists' metadata so the loudness of liking stays quick.
+// settled reports whether the pick can be acted on: 进行中的搜索与判断不给
+// 按钮，其余阶段（含未设阶段的旧状态）都算有结果。
+func (b *aiBarState) settled() bool {
+	return b.stage != aiBarSearching && b.stage != aiBarThinking
+}
+
+// aiBarMatches reports whether the bar still belongs to this song: a listener
+// who closed it, or a newer like, must not be overwritten by a late result.
+func (a *app) aiBarMatches(id string) bool {
+	return a.aiBar.open && a.aiBar.track.ID == id
+}
+
+// closeAIBar hides the bar for this song, leaving a newer song's bar alone.
+func (a *app) closeAIBar(id string) {
+	if a.aiBarMatches(id) {
+		a.aiBar = aiBarState{}
+		a.redraw()
+	}
+}
+
+// autoSuggestPlaylist asks for a suggestion after the source confirmed a like.
+// 推荐条立刻显示搜索与判断阶段；模型没把握就自动收起，不打扰。
 func (a *app) autoSuggestPlaylist(lib *library, tr music.Track) {
 	if !a.settings.AIEnabled || a.settings.AIAutoSuggestDisabled ||
 		a.settings.AIBaseURL == "" || a.settings.AIModel == "" {
@@ -413,24 +451,50 @@ func (a *app) autoSuggestPlaylist(lib *library, tr music.Track) {
 		return
 	}
 	a.aiAsked[tr.ID] = true
-	cfg := a.aiConfig(false)
+	cfg := a.aiConfig(a.settings.AIWebProvider == "native")
+	// 先亮出推荐条，让"正在搜索 / 正在判断"看得见。
+	a.post(func() {
+		a.aiBar = aiBarState{open: true, track: tr, lib: lib, stage: aiBarSearching}
+		a.redraw()
+	})
 	go func() {
+		song := ai.Song{Name: tr.Name, Artists: tr.ArtistNames(), Album: tr.Album.Name}
 		candidates := a.aiCandidates(lib, &tr, 0)
 		if len(candidates) == 0 {
+			a.post(func() { a.closeAIBar(tr.ID) })
 			return
 		}
+		// 应用侧搜索给独立子超时；失败或没结果就按无联网继续判断。
+		webCtx, cancelWeb := context.WithTimeout(context.Background(), 20*time.Second)
+		results := a.aiWebContext(webCtx, song)
+		cancelWeb()
+		if len(results) > 5 {
+			results = results[:5]
+		}
+		a.post(func() {
+			if a.aiBarMatches(tr.ID) {
+				a.aiBar.stage = aiBarThinking
+				a.aiBar.sources = results
+				a.redraw()
+			}
+		})
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		pick, err := ai.Suggest(ctx, newAIClient(cfg), ai.SuggestInput{
-			Song:        ai.Song{Name: tr.Name, Artists: tr.ArtistNames(), Album: tr.Album.Name},
+			Song:        song,
 			Candidates:  candidates,
 			Preferences: a.aiPreferenceTexts(lib),
+			WebResults:  toWebResults(results),
 		})
 		if err != nil {
-			a.post(func() { delete(a.aiAsked, tr.ID) })
+			a.post(func() {
+				delete(a.aiAsked, tr.ID)
+				a.closeAIBar(tr.ID)
+			})
 			return
 		}
 		if pick.PlaylistID == "" || pick.Confidence < 0.85 {
+			a.post(func() { a.closeAIBar(tr.ID) })
 			return
 		}
 		name := pick.PlaylistID
@@ -441,8 +505,13 @@ func (a *app) autoSuggestPlaylist(lib *library, tr music.Track) {
 			}
 		}
 		a.post(func() {
+			if !a.aiBarMatches(tr.ID) {
+				return
+			}
 			a.aiToast = nil
-			a.aiBar = aiBarState{open: true, track: tr, lib: lib, pick: pick, name: name}
+			a.aiBar.pick = pick
+			a.aiBar.name = name
+			a.aiBar.stage = aiBarDone
 			if a.settings.AIAutoAdd && lib.can("removeFromPlaylist") {
 				a.aiBar.busy = true
 				a.addToThen(lib, pick.PlaylistID, &tr, func(err error) {
@@ -485,6 +554,42 @@ func (a *app) closeSuggestion() {
 	a.redraw()
 }
 
+// evidencePanel is the expandable source list above the bar: each hit is a
+// link the listener can open to check what the model actually read.
+func (a *app) evidencePanel(c *ui.Context, p palette, bottom float32) {
+	b := &a.aiBar
+	if !b.open || !b.evidenceOpen || !b.settled() {
+		return
+	}
+	g := shellGlass(p.dark, 0.48, 0.52)
+	panel := ui.Column(c.Key("ai-evidence")).Absolute().Left(16).Right(16).Bottom(bottom + 64).
+		Padding(14).Gap(6).Radius(16).
+		Material(glass.Glass{Style: glass.Regular, Clarity: 0.72, Tint: g.tint}).
+		Border(1, g.border).Shadow(0, 12, 32, -6, g.shade)
+	panel.Children(func() {
+		ui.Text(c, T("Evidence")).FontSize(12).FontWeight(600).TextColor(p.accent)
+		if len(b.sources) == 0 {
+			ui.Text(c, T("No web results")).FontSize(11.5).TextColor(p.muted)
+		}
+		for i, src := range b.sources {
+			if src.Title == "" || src.URL == "" {
+				continue
+			}
+			link := ui.ButtonBase(c.Key(fmt.Sprint("ai-evidence-", i))).
+				Height(24).Justify(ui.Start).Role(ui.RoleLink).Label(src.Title)
+			link.Children(func() {
+				ui.Text(c, src.Title).FontSize(11.5).TextColor(p.text).Shrink(1).MinWidth(0)
+			})
+			if link.Clicked() {
+				mygo.Shell.OpenExternal(src.URL)
+			}
+		}
+		if b.pick.Reason != "" {
+			ui.Text(c, b.pick.Reason).FontSize(11.5).TextColor(p.muted)
+		}
+	})
+}
+
 // suggestionBar is the suggestion after a like: it stays above the player,
 // with adding it, adjusting it, or closing it.
 func (a *app) suggestionBar(c *ui.Context, p palette, bottom float32) {
@@ -502,7 +607,14 @@ func (a *app) suggestionBar(c *ui.Context, p palette, bottom float32) {
 		// AI 标记：歌名前的小星形提示这是模型的判断，不是系统通知。
 		ui.Icon(c, iconSparkles).Size(16, 16).Shrink(0).TextColor(p.accent)
 		ui.Column(c).Grow(1).Basis(0).Shrink(1).MinWidth(0).Gap(2).Children(func() {
+			// 阶段文案让"正在搜 / 正在判断"可见，出结果后才显示歌单名。
 			title := Tf("AI suggests %s", b.name)
+			switch b.stage {
+			case aiBarSearching:
+				title = T("Searching the web…")
+			case aiBarThinking:
+				title = T("Thinking…")
+			}
 			switch {
 			case b.busy:
 				title = T("Adding…")
@@ -510,11 +622,18 @@ func (a *app) suggestionBar(c *ui.Context, p palette, bottom float32) {
 				title = T("Couldn't guess a playlist. Choose one yourself.")
 			}
 			ui.Text(c, title).FontSize(13).FontWeight(600).SingleLine().Shrink(1).MinWidth(0)
-			if b.pick.Reason != "" && !b.failed {
+			if b.settled() && b.pick.Reason != "" && !b.failed {
 				ui.Text(c, b.pick.Reason).FontSize(11.5).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(0)
 			}
 		})
-		if !b.busy && !b.failed {
+		if b.settled() && !b.busy && !b.failed {
+			// 依据按钮：展开后能看到模型读过的网页。
+			if len(b.sources) > 0 {
+				label := Tf("Searched %d pages", len(b.sources))
+				if pillButton(c.Key("ai-bar-evidence"), nil, label, p.hover.Over(p.bg), p.text).Clicked() {
+					b.evidenceOpen = !b.evidenceOpen
+				}
+			}
 			// 主操作用 accent，次操作用 hover 底，与对话框按钮的层级一致。
 			if pillButton(c.Key("ai-bar-add"), nil, T("Add"), p.accent, p.onAccent).Clicked() {
 				a.addSuggested(b.lib, &b.track, b.pick)

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 
 	"mygo-music/internal/ai"
 	"mygo-music/internal/music"
+	"mygo-music/internal/websearch"
 )
 
 // The song menu offers the AI playlist suggestion when the listener turned it
@@ -126,6 +128,7 @@ func TestLikingSuggestsPlaylistAfterSourceConfirms(t *testing.T) {
 	if !liked {
 		t.Fatal("the source was not asked to like the song")
 	}
+	until(t, ch, func() bool { return a.aiBar.stage == aiBarDone })
 
 	tt := ui.NewTester(a.view, 1200, 800)
 	tt.Frame()
@@ -432,9 +435,10 @@ func TestAIFrames(t *testing.T) {
 	saveFrame(t, dir, "ai-suggestion-adjust.png", view.Image())
 
 	bar := newTestApp()
-	bar.aiBar = aiBarState{open: true, lib: bar.library, track: song("1", "夜曲", "周杰伦"), pick: ai.Suggestion{
-		PlaylistID: "10", Confidence: 0.9, Reason: "适合通勤",
-	}, name: "通勤"}
+	bar.aiBar = aiBarState{open: true, stage: aiBarDone, lib: bar.library,
+		track: song("1", "夜曲", "周杰伦"), pick: ai.Suggestion{
+			PlaylistID: "10", Confidence: 0.9, Reason: "适合通勤",
+		}, name: "通勤"}
 	barView := ui.NewTester(bar.view, 1200, 800)
 	settled(barView)
 	saveFrame(t, dir, "ai-suggestion-bar.png", barView.Image())
@@ -444,4 +448,129 @@ func TestAIFrames(t *testing.T) {
 	}
 	settled(barView)
 	saveFrame(t, dir, "ai-adjust-dialog.png", barView.Image())
+}
+
+// fakeSearchProvider 是无头测试里的联网桩，只返回预设结果或错误。
+type fakeSearchProvider struct {
+	results []websearch.Result
+	err     error
+	queried chan string
+}
+
+func (f fakeSearchProvider) Search(ctx context.Context, query string) ([]websearch.Result, error) {
+	if f.queried != nil {
+		f.queried <- query
+	}
+	return f.results, f.err
+}
+
+// useFakeSearch 把 provider 换成桩，并还原真实实现。
+func useFakeSearch(t *testing.T, p websearch.Provider) {
+	t.Helper()
+	real := newWebProvider
+	newWebProvider = func(name, key string) websearch.Provider { return p }
+	t.Cleanup(func() { newWebProvider = real })
+}
+
+// likingShowsSearchThenEvidence checks that an auto suggestion shows the
+// search stage first, then the model's pick with pages the listener can open.
+func TestLikingShowsSearchThenEvidence(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"content": `{"playlist_id":"10","confidence":0.9,"reason":"适合通勤"}`,
+			}}},
+		})
+	}))
+	defer srv.Close()
+
+	queried := make(chan string, 1)
+	useFakeSearch(t, fakeSearchProvider{
+		results: []websearch.Result{{Title: "夜曲 - 周杰伦", URL: "https://example.com/song", Snippet: "一首慢歌"}},
+		queried: queried,
+	})
+
+	a := newTestApp()
+	a.settings.AIEnabled = true
+	a.settings.AIBaseURL = srv.URL
+	a.settings.AIModel = "m"
+	a.settings.AIWebProvider = "tavily"
+	a.mine = []music.Playlist{{ID: "10", Name: "通勤", Mine: true}}
+	tr := song("1", "夜曲", "周杰伦")
+	a.pl.Cue([]music.Track{tr})
+	a.account = &music.Account{ID: "1"}
+
+	ch := posts(a)
+	f := fake(a)
+	f.like = func(id string, on bool) error { return nil }
+	a.likeCurrent()
+
+	// 喜欢后推荐条立刻出现，且第一帧是搜索阶段。
+	until(t, ch, func() bool { return a.aiBar.open })
+	if a.aiBar.stage != aiBarSearching {
+		t.Fatalf("stage = %v, want searching", a.aiBar.stage)
+	}
+	runPost(t, ch) // 进入判断阶段
+	if a.aiBar.stage != aiBarThinking {
+		t.Fatalf("stage = %v, want thinking", a.aiBar.stage)
+	}
+	if q := <-queried; !strings.Contains(q, "夜曲") || strings.Contains(q, "通勤") {
+		t.Fatalf("query = %q, want the song only", q)
+	}
+	until(t, ch, func() bool { return a.aiBar.stage == aiBarDone })
+	if len(a.aiBar.sources) != 1 || a.aiBar.sources[0].URL != "https://example.com/song" {
+		t.Fatalf("sources = %+v", a.aiBar.sources)
+	}
+
+	tt := ui.NewTester(a.view, 1200, 800)
+	tt.Frame()
+	if !strings.Contains(strings.Join(tt.Texts(), "\n"), T("Searched 1 pages")) {
+		t.Fatalf("texts = %q", tt.Texts())
+	}
+	if err := tt.Click(T("Searched 1 pages")); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !a.aiBar.evidenceOpen {
+		t.Fatal("evidence panel did not open")
+	}
+	if !strings.Contains(strings.Join(tt.Texts(), "\n"), "夜曲 - 周杰伦") {
+		t.Fatalf("evidence texts = %q", tt.Texts())
+	}
+}
+
+// lowConfidenceHidesBarWithEvidence checks that a shy suggestion still closes
+// its bar even when web search returned pages.
+func TestLowConfidenceHidesBarWithEvidence(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"content": `{"playlist_id":"10","confidence":0.5,"reason":"也许"}`,
+			}}},
+		})
+	}))
+	defer srv.Close()
+
+	useFakeSearch(t, fakeSearchProvider{results: []websearch.Result{{Title: "A", URL: "https://example.com"}}})
+
+	a := newTestApp()
+	a.settings.AIEnabled = true
+	a.settings.AIBaseURL = srv.URL
+	a.settings.AIModel = "m"
+	a.settings.AIWebProvider = "tavily"
+	a.mine = []music.Playlist{{ID: "10", Name: "通勤", Mine: true}}
+	tr := song("1", "夜曲", "周杰伦")
+	a.pl.Cue([]music.Track{tr})
+	a.account = &music.Account{ID: "1"}
+
+	ch := posts(a)
+	f := fake(a)
+	f.like = func(id string, on bool) error { return nil }
+	a.likeCurrent()
+	until(t, ch, func() bool { return a.aiBar.open && a.aiBar.stage == aiBarThinking })
+	// 低置信度：阶段不会到 done，推荐条应自己收起。
+	runPost(t, ch)
+	if a.aiBar.open {
+		t.Fatal("low-confidence bar stayed open")
+	}
 }

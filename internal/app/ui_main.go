@@ -80,6 +80,7 @@ func (a *app) view(c *ui.Context) {
 						// The bars float over the page, which scrolls under them:
 						// positioned, they paint over it.
 						a.pageTop(c)
+						a.evidencePanel(c, a.pal, playerBarHeight+4)
 						a.suggestionBar(c, a.pal, playerBarHeight+4)
 						a.playerBar(c)
 					})

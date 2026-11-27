@@ -38,7 +38,9 @@ func TestLikeShowsPersistentSuggestionBar(t *testing.T) {
 	f.like = func(id string, on bool) error { return nil }
 	ch := posts(a)
 	a.likeCurrent()
+	// 推荐条先在搜索阶段就出现，等判断完才给出可操作的歌单。
 	until(t, ch, func() bool { return a.aiBar.open })
+	until(t, ch, func() bool { return a.aiBar.stage == aiBarDone })
 
 	tt := ui.NewTester(a.view, 1200, 800)
 	settled(tt)
