@@ -48,18 +48,62 @@ func TestPreferencesPersist(t *testing.T) {
 	}
 }
 
-// Injection sends at most the newest twenty preferences for the listener.
-func TestPreferencesInjectionCap(t *testing.T) {
-	store := newPreferenceStore(filepath.Join(t.TempDir(), "ai-preferences.json"))
-	for i := range 25 {
-		store.add(Preference{Source: "netease", Account: "u1", Text: string(rune('a' + i)), PlaylistID: "10"})
+// 旧文件超限时只启用最新二十条，下一次保存才更新文件。
+func TestPreferencesLimitLegacyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ai-preferences.json")
+	var file struct {
+		Preferences []Preference `json:"preferences"`
 	}
+	for index := range preferenceLimit + 1 {
+		file.Preferences = append(file.Preferences, Preference{Source: "netease", Account: "u1", Text: string(rune('a' + index))})
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newPreferenceStore(path)
+	if got := store.forListener("netease", "u1"); len(got) != preferenceLimit || got[preferenceLimit-1].Text != "b" {
+		t.Fatalf("active preferences loaded from legacy file = %+v", got)
+	}
+	if afterLoad, err := os.ReadFile(path); err != nil || string(afterLoad) != string(raw) {
+		t.Fatalf("loading changed the legacy file: %v", err)
+	}
+
+	store.remove("netease", "u1", 0)
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(saved, &file); err != nil || len(file.Preferences) != preferenceLimit-1 || file.Preferences[0].Text != "b" {
+		t.Fatalf("saved preferences kept an evicted record: %+v, %v", file.Preferences, err)
+	}
+}
+
+// Each source and account keeps twenty preferences, dropping the oldest one.
+func TestPreferencesLimitPerListener(t *testing.T) {
+	store := newPreferenceStore("")
+	for i := range preferenceLimit + 1 {
+		store.add(Preference{Source: "netease", Account: "u1", Text: string(rune('a' + i))})
+	}
+	store.add(Preference{Source: "netease", Account: "u2", Text: "other account"})
+	store.add(Preference{Source: "spotify", Account: "u1", Text: "other source"})
+
 	got := store.forListener("netease", "u1")
-	if len(got) != 20 {
-		t.Fatalf("injected %d, want 20", len(got))
+	if len(got) != preferenceLimit || got[0].Text != "u" || got[len(got)-1].Text != "b" {
+		t.Fatalf("limited preferences = %+v", got)
 	}
-	if got[0].Text != "y" {
-		t.Errorf("oldest injected = %q, want the newer ones", got[0].Text)
+	if got := store.forListener("netease", "u2"); len(got) != 1 || got[0].Text != "other account" {
+		t.Fatalf("other account preferences = %+v", got)
+	}
+	if got := store.forListener("spotify", "u1"); len(got) != 1 || got[0].Text != "other source" {
+		t.Fatalf("other source preferences = %+v", got)
+	}
+	store.remove("netease", "u1", 0)
+	if got := store.forListener("netease", "u1"); len(got) != preferenceLimit-1 || got[len(got)-1].Text != "b" {
+		t.Fatalf("removing a preference brought back the oldest one: %+v", got)
 	}
 }
 
@@ -87,7 +131,7 @@ func TestPreferenceRemove(t *testing.T) {
 
 	store.remove("netease", "u1", 0)
 	got := store.forListener("netease", "u1")
-	if len(got) != 1 || got[0].Text != "two" {
+	if len(got) != 1 || got[0].Text != "one" {
 		t.Fatalf("after remove = %+v", got)
 	}
 }

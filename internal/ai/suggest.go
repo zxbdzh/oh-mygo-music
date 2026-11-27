@@ -29,7 +29,7 @@ type SuggestInput struct {
 	Song       Song
 	Candidates []Candidate
 	// Preferences are what the listener taught earlier, for this source and
-	// account, newest first.
+	// account, with the current song's adjustment included when available.
 	Preferences []string
 	// WebResults 是应用侧搜索到的网页摘要，只用于核对歌曲身份与风格，
 	// 不是候选的一部分；nil 表示这次没有联网。
@@ -70,6 +70,7 @@ const suggestSystem = `You choose one of the listener's own playlists for a song
 Answer with a single JSON object and nothing else:
 {"playlist_id":"<one of the candidate ids, or empty>","confidence":<0..1>,"reason":"<one short sentence>"}
 Only pick an id from the candidate list. If none fits, use an empty playlist_id and confidence 0.
+Use web search only for the current song.
 Write the reason in the language of the playlist names.`
 
 // webContextSystem 是联网结果专用的独立 system 段：搜索内容来自不可信的
@@ -147,7 +148,8 @@ func preferencesPrompt(prefs []string) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("What this listener taught earlier, newest first:\n")
+	b.WriteString("What this listener taught earlier:\n")
+	b.WriteString("For the same song, prefer its most recent adjustment. Apply adjustments to other songs only when the reason also fits them.\n")
 	for _, p := range prefs {
 		fmt.Fprintf(&b, "- %s\n", p)
 	}

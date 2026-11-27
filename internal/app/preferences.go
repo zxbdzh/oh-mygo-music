@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo"
 )
+
+const preferenceLimit = 20
 
 // Preference is one thing the listener taught the AI by adopting an adjusted
 // playlist for a song.
@@ -15,6 +18,11 @@ type Preference struct {
 	Source       string    `json:"source"`
 	Account      string    `json:"account"`
 	Text         string    `json:"text"`
+	TrackID      string    `json:"trackId,omitempty"`
+	TrackName    string    `json:"trackName,omitempty"`
+	Artists      string    `json:"artists,omitempty"`
+	Album        string    `json:"album,omitempty"`
+	CoverURL     string    `json:"coverUrl,omitempty"`
 	PlaylistID   string    `json:"playlistId"`
 	PlaylistName string    `json:"playlistName,omitempty"`
 	UpdatedAt    time.Time `json:"updatedAt"`
@@ -44,6 +52,7 @@ func newPreferenceStore(path string) *preferenceStore {
 		}
 		if json.Unmarshal(b, &file) == nil {
 			s.items = file.Preferences
+			s.trim()
 		}
 	}
 	return s
@@ -53,33 +62,51 @@ func newPreferenceStore(path string) *preferenceStore {
 func (s *preferenceStore) add(p Preference) {
 	p.UpdatedAt = time.Now()
 	s.items = append(s.items, p)
+	s.trim()
 	s.save()
+}
+
+// 每个音源账号独立保留最近的记录，手动添加和采纳调整共用上限。
+func (s *preferenceStore) trim() {
+	if len(s.items) <= preferenceLimit {
+		return
+	}
+	counts := make(map[[2]string]int)
+	kept := make([]Preference, 0, len(s.items))
+	for index := len(s.items) - 1; index >= 0; index-- {
+		preference := s.items[index]
+		key := [2]string{preference.Source, preference.Account}
+		if counts[key] < preferenceLimit {
+			counts[key]++
+			kept = append(kept, preference)
+		}
+	}
+	slices.Reverse(kept)
+	s.items = kept
 }
 
 // remove drops the preference shown at index, which is the listener's list
 // order, and keeps the file.
 func (s *preferenceStore) remove(source, account string, at int) {
 	var seen int
-	var kept []Preference
-	for _, p := range s.items {
+	for i := len(s.items) - 1; i >= 0; i-- {
+		p := s.items[i]
 		if p.Source == source && p.Account == account {
 			if seen == at {
-				seen++
-				continue
+				s.items = append(s.items[:i], s.items[i+1:]...)
+				s.save()
+				return
 			}
 			seen++
 		}
-		kept = append(kept, p)
 	}
-	s.items = kept
-	s.save()
 }
 
-// forListener returns the newest twenty preferences of a source and account,
+// forListener returns the retained preferences for a source and account,
 // newest first, as the model sees them.
 func (s *preferenceStore) forListener(source, account string) []Preference {
 	var out []Preference
-	for i := len(s.items) - 1; i >= 0 && len(out) < 20; i-- {
+	for i := len(s.items) - 1; i >= 0; i-- {
 		if p := s.items[i]; p.Source == source && p.Account == account {
 			out = append(out, p)
 		}
@@ -98,6 +125,8 @@ func (s *preferenceStore) save() {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return
 	}
-	_ = os.WriteFile(s.path+".part", b, 0o600)
+	if err := os.WriteFile(s.path+".part", b, 0o600); err != nil {
+		return
+	}
 	_ = os.Rename(s.path+".part", s.path)
 }
