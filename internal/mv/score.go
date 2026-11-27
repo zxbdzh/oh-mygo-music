@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Score 给搜索候选排序：只用来决定展示顺序，不自动绑定。
+// Score 给搜索候选排序：决定展示顺序，也是 AutoMatch 判断领先程度的依据。
 // 音频向内容扣分，MV 标记加分；理由只保留人能懂的一两句。
 func Score(query, artist string, trackDuration time.Duration, c Candidate) Candidate {
 	title := normalize(c.Title)
@@ -73,6 +73,46 @@ func Rank(candidates []Candidate, query, artist string, trackDuration time.Durat
 		out = out[:limit]
 	}
 	return out
+}
+
+// 自动匹配的门槛：宁可这首没有画面，也不放一条错的内容上去。
+const (
+	autoMatchDurationDiff = 0.05 // 与音频时长相差不超过 5%
+	autoMatchLead         = 0.15 // 领先第二名的分数差
+)
+
+// AutoMatch 判断排好序的第一条候选能不能不经听众确认直接绑定。
+//
+// 三条硬条件同时成立才算：标题里就有歌名、时长和音频相差不超过 5%、
+// 标题不带翻弹或纯音频一类的标记；再加一条明显领先第二名。
+// 少一条就当没找到，让听众自己在候选里挑——自动配错的画面比没有画面更难受。
+//
+// ranked 必须是 Rank 的结果：领先程度用的是 Score 给的分数。
+func AutoMatch(ranked []Candidate, song string, trackDuration time.Duration) (Candidate, bool) {
+	if len(ranked) == 0 || song == "" {
+		return Candidate{}, false
+	}
+	best := ranked[0]
+	title, wanted := normalize(best.Title), normalize(song)
+	// 只认标题，不把歌手并进硬条件：合唱、翻唱的署名写法太多，容易误伤。
+	if !strings.Contains(title, wanted) {
+		return Candidate{}, false
+	}
+	if containsAny(title, nonMVMarkers) {
+		return Candidate{}, false
+	}
+	// 时长对不上就是不认识这条视频，宁可不绑。
+	if trackDuration <= 0 || best.Duration <= 0 {
+		return Candidate{}, false
+	}
+	if diff := absDuration(best.Duration - trackDuration); float64(diff)/float64(trackDuration) > autoMatchDurationDiff {
+		return Candidate{}, false
+	}
+	// 两条差不多时谁都不绑，让听众自己看。
+	if len(ranked) > 1 && best.Score-ranked[1].Score < autoMatchLead {
+		return Candidate{}, false
+	}
+	return best, true
 }
 
 func sortCandidates(candidates []Candidate) {

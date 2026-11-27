@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -174,6 +175,8 @@ func (a *app) openMV() {
 	}
 	binding, ok := a.mvStore.Binding(tr.Source, tr.ID)
 	if !ok {
+		// 没有绑定：开着自动匹配就先找一条，下一帧按新绑定加载。
+		a.autoMatchMV(tr)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -311,6 +314,68 @@ func (a *app) closeMV() {
 	}
 	a.releaseMV()
 	a.mv = mvState{epoch: a.mv.epoch + 1}
+}
+
+// autoMatchMV 在没有绑定时，后台为这首歌找一条 MV 并绑上。
+//
+// 只在 openMV 里调用，也就是 MV 页签真的会占用画面的时候：离开页签、关掉 MV
+// 背景或减少动效都不会联网。同一首歌只试一次，搜不到或不够确定就当没有 MV，
+// 退回封面和歌词，不打扰正在听歌的人。
+func (a *app) autoMatchMV(tr *music.Track) {
+	if !a.settings.MVAutoMatch || a.mvStore == nil || tr == nil {
+		return
+	}
+	key := bindingKeyOf(tr)
+	if a.mvAutoTried == nil {
+		a.mvAutoTried = map[string]bool{}
+	}
+	if a.mvAutoTried[key] {
+		return
+	}
+	query := strings.TrimSpace(tr.Name + " " + tr.ArtistNames())
+	if query == "" {
+		return
+	}
+	a.mvAutoTried[key] = true
+	track, epoch := *tr, a.mv.epoch
+	cookie := a.mvCookie()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		found, err := mvSearchCandidates(ctx, query, cookie)
+		if err != nil {
+			return
+		}
+		duration := time.Duration(track.Duration) * time.Millisecond
+		ranked := mv.Rank(found, track.Name, track.ArtistNames(), duration, 8)
+		pick, ok := mv.AutoMatch(ranked, track.Name, duration)
+		if !ok {
+			return
+		}
+		a.post(func() { a.autoMatched(epoch, track, pick) })
+	}()
+}
+
+// autoMatched 在主线程写入自动匹配的绑定，下一帧的 openMV 会照它加载画面。
+func (a *app) autoMatched(epoch uint64, tr music.Track, pick mv.Candidate) {
+	// 期间切歌或离开 MV 页签了，这条结果已经过期。
+	if a.quitting || a.mv.epoch != epoch || a.mvStore == nil {
+		return
+	}
+	// 听众自己已经挑过一条，自动结果不能覆盖。
+	if _, ok := a.mvStore.Binding(tr.Source, tr.ID); ok {
+		return
+	}
+	_ = a.mvStore.PutBinding(mv.Binding{
+		Source:      tr.Source,
+		TrackID:     tr.ID,
+		TrackName:   tr.Name,
+		TrackArtist: tr.ArtistNames(),
+		VideoID:     pick.VideoID,
+		Title:       pick.Title,
+		Uploader:    pick.Uploader,
+		Auto:        true,
+	})
 }
 
 // ensureMVStore 第一次需要时读取绑定与缓存；失败不阻塞播放。

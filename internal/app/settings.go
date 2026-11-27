@@ -140,6 +140,10 @@ type settings struct {
 	MVHideLyrics bool    `json:"mvHideLyrics"`
 	MVQuality    int     `json:"mvQuality"`
 	MV60FPS      bool    `json:"mv60fps"`
+	// MVAutoMatch 自动匹配 MV：MV 页签打开而当前歌还没有绑定时，后台搜一条
+	// 结果足够确定的 MV 直接绑上（门槛见 mv.AutoMatch）。默认开启，
+	// 只有真的在 MV 页签看的时候才联网。
+	MVAutoMatch bool `json:"mvAutoMatch"`
 	// AppIcon is where the app's icon shows on macOS (appIcons); elsewhere
 	// it is always in the notification area.
 	AppIcon string `json:"appIcon"`
@@ -158,7 +162,7 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", PromptDownload: true, Appearance: "system", CoverBackdrop: true, CoverBackdropStyle: defaultCoverBackdropStyle(), Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, StageIntensity: "standard", CrossfadeEnabled: true, CrossfadeDurationMs: 5000, PlaybackFadeEnabled: true, PauseFadeOutMs: 180, PlayFadeInMs: 260, MVBackground: true, MVScale: 115, MVBrightness: 100, MVQuality: 1080, MV60FPS: true}
+	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", PromptDownload: true, Appearance: "system", CoverBackdrop: true, CoverBackdropStyle: defaultCoverBackdropStyle(), Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, StageIntensity: "standard", CrossfadeEnabled: true, CrossfadeDurationMs: 5000, PlaybackFadeEnabled: true, PauseFadeOutMs: 180, PlayFadeInMs: 260, MVBackground: true, MVScale: 115, MVBrightness: 100, MVQuality: 1080, MV60FPS: true, MVAutoMatch: true}
 }
 
 type coverBackdropStyle struct {

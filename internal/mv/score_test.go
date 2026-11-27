@@ -27,3 +27,40 @@ func TestScoreEmptyQuery(t *testing.T) {
 		t.Fatalf("negative score: %f", c.Score)
 	}
 }
+
+// 自动匹配只在标题、时长都对得上、内容像 MV 且明显领先时才认定一条。
+func TestAutoMatchNeedsTitleLengthAndLead(t *testing.T) {
+	length := 4 * time.Minute
+	good := Candidate{VideoID: "good", Title: "晴天 MV", Uploader: "周杰伦", Duration: length}
+	for _, c := range []struct {
+		name       string
+		candidates []Candidate
+		song       string
+		duration   time.Duration
+		want       string
+	}{
+		{"alone and matching", []Candidate{good}, "晴天", length, "good"},
+		{"longer than the song", []Candidate{{VideoID: "short", Title: "晴天 MV", Duration: 2 * time.Minute}}, "晴天", length, ""},
+		{"another song's title", []Candidate{{VideoID: "other", Title: "雨天", Duration: length}}, "晴天", length, ""},
+		{"a cover", []Candidate{{VideoID: "cover", Title: "晴天 翻唱", Duration: length}}, "晴天", length, ""},
+		{"two close matches", []Candidate{
+			good,
+			{VideoID: "rival", Title: "晴天 MV", Uploader: "周杰伦", Duration: length},
+		}, "晴天", length, ""},
+		{"no candidates", nil, "晴天", length, ""},
+		{"unknown length", []Candidate{{VideoID: "unknown", Title: "晴天 MV"}}, "晴天", length, ""},
+		{"unknown song length", []Candidate{good}, "晴天", 0, ""},
+	} {
+		ranked := Rank(c.candidates, c.song, "", c.duration, 8)
+		got, ok := AutoMatch(ranked, c.song, c.duration)
+		if c.want == "" {
+			if ok {
+				t.Errorf("%s: matched %q, want nothing", c.name, got.VideoID)
+			}
+			continue
+		}
+		if !ok || got.VideoID != c.want {
+			t.Errorf("%s: matched %q (%v), want %q", c.name, got.VideoID, ok, c.want)
+		}
+	}
+}

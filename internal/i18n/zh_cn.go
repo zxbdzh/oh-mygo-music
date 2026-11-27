@@ -2,12 +2,15 @@ package i18n
 
 // zhCN is the app's text in Simplified Chinese, by its English.
 var zhCN = map[string]string{
-	"MV Background":                 "MV 背景",
-	"MV":                            "MV",
-	"Choose an MV for %s":           "为 %s 选择 MV",
-	"Choose MV":                     "选择 MV",
-	"Manage MV":                     "管理 MV",
-	"Manage MV: %s":                 "管理 MV（%s）",
+	"MV Background":          "MV 背景",
+	"MV":                     "MV",
+	"Choose an MV for %s":    "为 %s 选择 MV",
+	"Choose MV":              "选择 MV",
+	"Manage MV":              "管理 MV",
+	"Manage MV: %s":          "管理 MV（%s）",
+	"Find MVs Automatically": "自动匹配 MV",
+	"When a song's MV page opens without an MV yet, search for one and bind it only when the title, length and content type agree. Uses the network.": "某首歌还没有 MV 时，打开它的 MV 页会联网搜一次；只有标题、时长和内容类型都对得上才自动绑定，没把握就留给你自己挑。",
+	"Auto-matched":                  "自动匹配",
 	"%dp":                           "%dp",
 	"%dp · %d fps":                  "%dp · %d 帧",
 	"480p":                          "480p",

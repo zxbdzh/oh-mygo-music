@@ -1,6 +1,7 @@
 // Package mv 把一首歌对应到一条在线 MV，并把它解析成能直接播放的静音视频流。
 //
-// 首版只接 B 站：搜索候选由听众确认后写入绑定，解析结果带有效期缓存。
+// 首版只接 B 站：搜索候选由听众确认后写入绑定，没有绑定时也可以由 AutoMatch
+// 按严格门槛自己认定一条（Binding.Auto）；解析结果带有效期缓存。
 // 视频只是画面，声音仍由播放器负责，所以这里不关心音轨。
 package mv
 
@@ -17,7 +18,8 @@ type Candidate struct {
 	Reasons   []string
 }
 
-// Binding 是听众确认过的对应关系，键为音源加曲目 ID。
+// Binding 是一首歌与一条 MV 的对应关系，键为音源加曲目 ID。
+// 它有两个来源：听众在候选里挑的，和自动匹配自己认定的（Auto）。
 type Binding struct {
 	Source      string    `json:"source"`
 	TrackID     string    `json:"trackId"`
@@ -27,7 +29,9 @@ type Binding struct {
 	Title       string    `json:"title,omitempty"`
 	Uploader    string    `json:"uploader,omitempty"`
 	OffsetMs    int       `json:"offsetMs,omitempty"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	// Auto 表示这条来自自动匹配，不是听众挑的；听众手动选一条就覆盖它。
+	Auto      bool      `json:"auto,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Key 是绑定和缓存的主键。不同音源的曲目 ID 会撞，所以必须带上音源。

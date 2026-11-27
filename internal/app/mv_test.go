@@ -51,11 +51,107 @@ func TestMVOpensForBoundTrackAndClosesOnTrackChange(t *testing.T) {
 func TestMVSkipsUnboundTrack(t *testing.T) {
 	a := newTestApp()
 	a.settings.MVBackground = true
+	// 自动匹配会为没绑定的歌联网搜索，这条只验证手动路径不发请求。
+	a.settings.MVAutoMatch = false
 	a.mvStore = newTestMVStore(t, "other", "other")
 	a.nowPlaying, a.npPane = true, paneMV
 	a.openMV()
 	if a.mv.loading || a.mv.key != "" {
 		t.Fatalf("mv started for an unbound track: %+v", a.mv)
+	}
+}
+
+// 没绑定的歌在 MV 页签显示时搜一次并写成自动绑定，之后按它加载画面。
+func TestMVAutoMatchBindsWhenMVPageShows(t *testing.T) {
+	a := newTestApp()
+	old, oldResolve := mvSearchCandidates, mvResolve
+	defer func() { mvSearchCandidates, mvResolve = old, oldResolve }()
+	searches := 0
+	mvSearchCandidates = func(_ context.Context, query, _ string) ([]mv.Candidate, error) {
+		searches++
+		return []mv.Candidate{{VideoID: "BVAUTO", Title: query, Duration: 200 * time.Second}}, nil
+	}
+	mvResolve = func(context.Context, string, mv.QualityOptions, string) (*mv.Resolved, error) {
+		return nil, errors.New("offline in tests")
+	}
+	store, err := mv.Open(t.TempDir() + "/mv.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.mvStore = store
+	tr := song("auto-1", "晴天", "周杰伦")
+	tr.Source = "fake"
+	a.pl.Cue([]music.Track{tr})
+	ch := posts(a)
+	a.nowPlaying, a.npPane = true, paneMV
+	// 每帧都会调用 openMV，同一首歌只该搜一次。
+	a.openMV()
+	a.openMV()
+	runPost(t, ch)
+	if searches != 1 {
+		t.Fatalf("searched %d times, want once", searches)
+	}
+	binding, ok := store.Binding("fake", "auto-1")
+	if !ok || binding.VideoID != "BVAUTO" || !binding.Auto {
+		t.Fatalf("binding %+v, %v", binding, ok)
+	}
+	// 下一次 openMV 有绑定可用了，画面开始加载。
+	a.openMV()
+	if a.mv.key != bindingKeyOf(&tr) {
+		t.Fatalf("mv key %q, want %q", a.mv.key, bindingKeyOf(&tr))
+	}
+}
+
+// 关掉自动匹配后，没绑定的歌不去联网。
+func TestMVAutoMatchOffDoesNotSearch(t *testing.T) {
+	a := newTestApp()
+	old := mvSearchCandidates
+	defer func() { mvSearchCandidates = old }()
+	mvSearchCandidates = func(context.Context, string, string) ([]mv.Candidate, error) {
+		t.Error("searched with auto match off")
+		return nil, nil
+	}
+	store, err := mv.Open(t.TempDir() + "/mv.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.mvStore = store
+	a.settings.MVAutoMatch = false
+	tr := song("auto-off", "晴天", "周杰伦")
+	tr.Source = "fake"
+	a.pl.Cue([]music.Track{tr})
+	a.nowPlaying, a.npPane = true, paneMV
+	a.openMV()
+}
+
+// 自动结果不覆盖听众自己挑的那一条。
+func TestMVAutoMatchKeepsManualBinding(t *testing.T) {
+	a := newTestApp()
+	a.mvStore = newTestMVStore(t, "fake", "manual-1")
+	tr := song("manual-1", "晴天", "周杰伦")
+	tr.Source = "fake"
+	a.autoMatched(0, tr, mv.Candidate{VideoID: "BVAUTO", Title: "晴天 MV"})
+	binding, ok := a.mvStore.Binding("fake", "manual-1")
+	if !ok || binding.VideoID != "BVTEST" || binding.Auto {
+		t.Fatalf("binding %+v, %v: the manual choice was replaced", binding, ok)
+	}
+}
+
+// 离开 MV 页签后才回来的自动结果不写入。
+func TestMVAutoMatchDropsStaleResult(t *testing.T) {
+	a := newTestApp()
+	store, err := mv.Open(t.TempDir() + "/mv.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.mvStore = store
+	tr := song("stale-1", "晴天", "周杰伦")
+	tr.Source = "fake"
+	epoch := a.mv.epoch
+	a.closeMV() // 切歌或离开页签会让在途的结果过期
+	a.autoMatched(epoch, tr, mv.Candidate{VideoID: "BVAUTO", Title: "晴天 MV"})
+	if _, ok := store.Binding("fake", "stale-1"); ok {
+		t.Fatal("a stale auto match was written")
 	}
 }
 

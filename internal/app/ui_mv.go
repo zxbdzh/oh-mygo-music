@@ -69,6 +69,10 @@ func (a *app) mvButton(c *ui.Context, tr *music.Track) {
 	}
 	services := c.Services()
 	button.Menu(func(menu *ui.Menu) {
+		if binding.Auto {
+			// 自动匹配的结果要能一眼认出来，免得以为是自己挑的。
+			menu.Item(T("Auto-matched")).Disabled(true)
+		}
 		if menu.Item(T("Change")).Chosen() {
 			a.openMVDialog(tr)
 		}

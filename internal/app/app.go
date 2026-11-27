@@ -195,6 +195,8 @@ type app struct {
 	mvDialog          mvDialogState
 	mvLogin           mvLoginState
 	mvAccount         string
+	// mvAutoTried 记住哪些歌已经自动匹配过，失败也不每帧重搜。
+	mvAutoTried map[string]bool
 
 	backgroundTasks     []*backgroundTask
 	nextBackgroundTask  uint64
