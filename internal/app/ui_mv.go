@@ -196,7 +196,9 @@ func (a *app) mvDialogView(c *ui.Context) {
 			Background(p.bg).Border(1, p.hairline).Shadow(0, 24, 60, -12, ui.RGBA(0, 0, 0, 0.4)).
 			Transition(ui.ElementTransition{Animation: &ui.Snappy, Enter: &ui.Motion{Scale: 0.94}, Exit: &ui.Motion{Scale: 0.96}})
 		panel.Children(func() {
-			ui.Column(c).Gap(10).Children(func() {
+			// 内容列占满面板高度：候选列表靠 Grow(1) 取剩余空间，父列若由内容
+			// 撑高，列表就会撑到面板外面且不被裁剪。
+			ui.Column(c).Gap(10).Fill().Children(func() {
 				ui.Row(c).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, T("MV Background")).FontSize(17).FontWeight(700)
 					ui.Spacer(c)

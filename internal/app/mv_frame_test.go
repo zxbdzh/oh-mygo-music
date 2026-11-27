@@ -113,6 +113,7 @@ func TestMVPluginAccountSettingsFrame(t *testing.T) {
 }
 
 // 设置 MM_FRAMES 后保存 MV 搜索面板，供目视核对候选与搜索框。
+// 候选多到一屏放不下，顺手核对列表被裁在面板里、关闭按钮还在面板内。
 func TestMVSearchFrame(t *testing.T) {
 	dir := framesDir(t)
 	a := newTestApp()
@@ -127,6 +128,11 @@ func TestMVSearchFrame(t *testing.T) {
 			{VideoID: "BV1", Title: "晴天 MV", Uploader: "周杰伦", Reasons: []string{"Title matches", "Artist matches", "MV or official"}},
 			{VideoID: "BV2", Title: "晴天 现场版", Uploader: "周杰伦", Reasons: []string{"Title contains the song", "Artist matches"}},
 			{VideoID: "BV3", Title: "晴天 纯享", Uploader: "音乐搬运", Reasons: []string{"Title contains the song", "Audio-only or non-MV content"}},
+			{VideoID: "BV4", Title: "ChiChill乐团 · 晴天 现场版", Uploader: "周杰伦官方", Reasons: []string{"Song title words match", "Duration matches"}},
+			{VideoID: "BV5", Title: "晴天 (Hi-Res 无损)", Uploader: "{{PERSON_9w9tt0oc}}", Reasons: []string{"Title contains the song", "Audio-only or non-MV content"}},
+			{VideoID: "BV6", Title: "翻唱 晴天", Uploader: "时触", Reasons: []string{"Title contains the song", "Duration differs a lot"}},
+			{VideoID: "BV7", Title: "晴天 · 钢琴版", Uploader: "时触", Reasons: []string{"Title contains the song", "Duration matches"}},
+			{VideoID: "BV8", Title: "晴天 MV 官方", Uploader: "周杰伦", Reasons: []string{"Title contains the song", "MV or official"}},
 		},
 	}
 	tester := ui.NewTester(a.view, 1180, 780)
