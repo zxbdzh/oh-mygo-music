@@ -95,6 +95,24 @@ func (a *app) coverBackdropSlider(c *ui.Context, key, label string, value *float
 	})
 }
 
+func (a *app) mvSettingSlider(c *ui.Context, key, label string, value *float64, low, high float64) {
+	ui.Row(c.Key(key)).Gap(8).AlignItems(ui.Center).Children(func() {
+		slider := ui.Slider(c.Key("slider"), value, low, high).Step(1).Width(150).Label(label)
+		dirty := ui.Local(slider, "pending-save", func() bool { return false })
+		if slider.Changed() {
+			*dirty = true
+			a.redraw()
+		}
+		if *dirty && !slider.Pressed() {
+			*dirty = false
+			if err := a.settings.save(); err != nil {
+				a.toast = T("Could not save display preferences")
+			}
+		}
+		ui.Text(c, strconv.Itoa(int(*value+0.5))).Width(34).FontSize(12).TextAlign(ui.End)
+	})
+}
+
 // systemLanguages are the languages the system prefers; tests replace it.
 var systemLanguages = func() []string { return mygo.App.PreferredLanguages() }
 
@@ -610,14 +628,6 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 				a.changed()
 			}
 		})
-		row(T("MV Background"), T("Show a matched online MV behind the lyrics. No video loads when this is off or Reduce Motion is on."), func() {
-			if ui.Switch(c.Key("mv-background"), &s.MVBackground).Label(T("MV Background")).Changed() {
-				if !s.MVBackground {
-					a.closeMV()
-				}
-				a.changed()
-			}
-		})
 		row(T("Download Quality"), T("Default quality requested from plugins when downloading songs"), func() {
 			labels := make([]string, len(downloadQualityLevels))
 			at := 0
@@ -712,6 +722,40 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 				}
 			})
 		}
+		settingsHeading(c, block, T("MV"), iconVideo)
+		row(T("MV Background"), T("Show video in the MV tab. Reduce Motion keeps the lyrics and stops video loading."), func() {
+			if ui.Switch(c.Key("mv-background"), &s.MVBackground).Label(T("MV Background")).Changed() {
+				if !s.MVBackground {
+					a.closeMV()
+				}
+				a.changed()
+			}
+		})
+		row(T("MV Scale"), T("Zoom the MV background. Drag the video to reposition it."), func() {
+			a.mvSettingSlider(c, "mv-scale", T("MV Scale"), &s.MVScale, 100, 220)
+		})
+		row(T("MV Blur"), T("Soften the moving background."), func() {
+			a.mvSettingSlider(c, "mv-blur", T("MV Blur"), &s.MVBlur, 0, 16)
+		})
+		row(T("MV Brightness"), T("Adjust the MV background brightness."), func() {
+			a.mvSettingSlider(c, "mv-brightness", T("MV Brightness"), &s.MVBrightness, 60, 140)
+		})
+		row(T("MV Overlay"), T("Darken the MV background behind its controls."), func() {
+			a.mvSettingSlider(c, "mv-overlay", T("MV Overlay"), &s.MVOverlay, 0, 60)
+		})
+		row(T("Hide MV Lyrics"), T("Show the video without lyrics on the MV page."), func() {
+			if ui.Switch(c.Key("mv-hide-lyrics"), &s.MVHideLyrics).Label(T("Hide MV Lyrics")).Changed() {
+				a.changed()
+			}
+		})
+		row(T("Reset MV Position"), T("Return the MV background to the center."), func() {
+			if ui.Button(c.Key("reset-mv-position"), T("Reset")).Clicked() {
+				s.MVPanX, s.MVPanY = 0, 0
+				a.mv.pan = ui.Point{}
+				a.mv.panKey = a.mv.key
+				a.changed()
+			}
+		})
 	})
 
 	add("ai", T("AI"), iconSparkles, func(row settingsRow, block settingsBlock) {

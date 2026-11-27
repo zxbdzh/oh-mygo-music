@@ -130,7 +130,14 @@ type settings struct {
 	Fog bool `json:"fog"`
 	// MVBackground shows a song's online MV quietly behind the lyrics
 	// (在线 MV 背景)：默认开启，绑定过的歌才有画面。
-	MVBackground bool `json:"mvBackground"`
+	MVBackground bool    `json:"mvBackground"`
+	MVScale      float64 `json:"mvScale"`
+	MVBlur       float64 `json:"mvBlur"`
+	MVBrightness float64 `json:"mvBrightness"`
+	MVOverlay    float64 `json:"mvOverlay"`
+	MVPanX       float64 `json:"mvPanX"`
+	MVPanY       float64 `json:"mvPanY"`
+	MVHideLyrics bool    `json:"mvHideLyrics"`
 	// AppIcon is where the app's icon shows on macOS (appIcons); elsewhere
 	// it is always in the notification area.
 	AppIcon string `json:"appIcon"`
@@ -149,7 +156,7 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", PromptDownload: true, Appearance: "system", CoverBackdrop: true, CoverBackdropStyle: defaultCoverBackdropStyle(), Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, StageIntensity: "standard", CrossfadeEnabled: true, CrossfadeDurationMs: 5000, PlaybackFadeEnabled: true, PauseFadeOutMs: 180, PlayFadeInMs: 260, MVBackground: true}
+	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", PromptDownload: true, Appearance: "system", CoverBackdrop: true, CoverBackdropStyle: defaultCoverBackdropStyle(), Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, StageIntensity: "standard", CrossfadeEnabled: true, CrossfadeDurationMs: 5000, PlaybackFadeEnabled: true, PauseFadeOutMs: 180, PlayFadeInMs: 260, MVBackground: true, MVScale: 115, MVBrightness: 100}
 }
 
 type coverBackdropStyle struct {
@@ -196,6 +203,12 @@ func loadSettings() settings {
 			json.Unmarshal(b, &s)
 			s.CoverBackdropStyle.Blur = min(100, max(0, s.CoverBackdropStyle.Blur))
 			s.CoverBackdropStyle.Shade = min(100, max(0, s.CoverBackdropStyle.Shade))
+			s.MVScale = min(220, max(100, s.MVScale))
+			s.MVBlur = min(16, max(0, s.MVBlur))
+			s.MVBrightness = min(140, max(60, s.MVBrightness))
+			s.MVOverlay = min(60, max(0, s.MVOverlay))
+			s.MVPanX = min(60, max(-60, s.MVPanX))
+			s.MVPanY = min(60, max(-60, s.MVPanY))
 			// 旧版布尔联网开关迁移：开过就当作原生的服务商联网增强；
 			// 新字段已有值时以新字段为准，不再覆盖。
 			if s.AIWebSearch && s.AIWebProvider == "" {

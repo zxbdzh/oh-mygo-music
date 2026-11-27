@@ -2,10 +2,16 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"image"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
+	"mygo-music/internal/lyrics"
 	"mygo-music/internal/music"
 	"mygo-music/internal/mv"
 )
@@ -142,6 +148,94 @@ func TestMVReducedMotionDoesNotLoadVideo(t *testing.T) {
 	tt.Frame()
 	if a.mv.loading || a.mv.key != "" {
 		t.Fatalf("video loaded under reduce motion: %+v", a.mv)
+	}
+}
+
+// 拖动 MV 画面后松手，位置应写入设置并在下一次进入时恢复。
+func TestMVBackgroundDragPersistsPosition(t *testing.T) {
+	a := newTestApp()
+	a.settings.path = filepath.Join(t.TempDir(), "settings.json")
+	tr := song("mv-drag", "晴天", "周杰伦")
+	a.pl.Cue([]music.Track{tr})
+	a.mv.key = bindingKeyOf(&tr)
+	frame := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 32, 18)))
+	a.mv.frame = frame
+	a.nowPlaying, a.npPane, a.npT = true, paneMV, 1
+
+	tester := ui.NewTester(a.view, 1180, 780)
+	tester.Frame()
+	picture, ok := tester.Find("MV picture")
+	if !ok {
+		t.Fatal("MV picture not present")
+	}
+	x, y := picture.X+picture.W*.08, picture.Y+picture.H*.25
+	tester.Press(x, y)
+	for step := 1; step <= 6; step++ {
+		tester.Advance(16 * time.Millisecond)
+		tester.Move(x+40*float32(step)/6, y+20*float32(step)/6)
+	}
+	tester.Release(x+40, y+20)
+	tester.Advance(time.Second)
+	if a.mv.pan.X == 0 && a.mv.pan.Y == 0 {
+		t.Fatalf("drag did not move the canvas: %+v, picture=%+v", a.mv.pan, picture)
+	}
+	data, err := os.ReadFile(a.settings.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &a.settings); err != nil {
+		t.Fatal(err)
+	}
+	pan := a.mv.pan
+	a.closeMV()
+	a.mv.key, a.mv.frame = bindingKeyOf(&tr), frame
+	tester.Frame()
+	if difference := a.mv.pan.X - pan.X; difference < -0.01 || difference > 0.01 {
+		t.Fatalf("restored position %+v, want %+v", a.mv.pan, pan)
+	}
+}
+
+// 隐藏歌词只影响视频画面，减少动态效果时歌词要恢复。
+func TestMVHiddenLyricsReturnWithoutVideo(t *testing.T) {
+	a := newTestApp()
+	tr := song("mv-lyrics", "Lyrics fallback")
+	a.pl.Cue([]music.Track{tr})
+	const line = "A line that stays when the video goes away"
+	a.pl.SetLyrics(lyrics.Build("[00:01]"+line, ""))
+	a.mv.key = bindingKeyOf(&tr)
+	a.mv.frame = ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 32, 18)))
+	a.nowPlaying, a.npPane, a.npT = true, paneMV, 1
+	a.settings.MVHideLyrics = true
+	tester := ui.NewTester(a.view, 880, 650)
+	settled(tester)
+	if _, ok := tester.Find(line); ok {
+		t.Fatal("lyrics visible over the video")
+	}
+	tester.SetPreferences(ui.Preferences{ReduceMotion: true})
+	settled(tester)
+	if _, ok := tester.Find(line); !ok {
+		t.Fatal("fallback lyrics missing without video")
+	}
+}
+
+// 窄窗里通过管理菜单修改音画偏移，仍保留这首歌的绑定。
+func TestMVManageMenuChangesOffset(t *testing.T) {
+	a := newTestApp()
+	tr := song("mv-menu", "MV menu")
+	tr.Source = "fake"
+	a.pl.Cue([]music.Track{tr})
+	a.mvStore = newTestMVStore(t, tr.Source, tr.ID)
+	a.mv.key, a.nowPlaying, a.npPane, a.npT = bindingKeyOf(&tr), true, paneMV, 1
+	tester := ui.NewTester(a.view, 880, 650)
+	tester.Move(160, 60)
+	settled(tester)
+	tester.Click(T("Manage MV"))
+	if err := tester.ChooseMenuItem(T("Advance video by 100 ms")); err != nil {
+		t.Fatal(err)
+	}
+	binding, ok := a.mvStore.Binding(tr.Source, tr.ID)
+	if !ok || binding.OffsetMs != 100 || !a.mv.forceSync {
+		t.Fatalf("expected a persisted +100 ms offset and forced sync, got %+v", binding)
 	}
 }
 

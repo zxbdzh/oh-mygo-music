@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"rsc.io/qr"
 
+	"mygo-music/internal/i18n"
 	"mygo-music/internal/lyrics"
 	"mygo-music/internal/music"
 	"mygo-music/internal/mv"
@@ -16,6 +17,8 @@ import (
 // 设置 MM_FRAMES 后保存 MV 背景下的歌词页，供目视核对遮罩与底部控制条。
 func TestMVBackgroundFrame(t *testing.T) {
 	dir := framesDir(t)
+	defer i18n.SetLanguage(i18n.English)
+	i18n.SetLanguage(i18n.Chinese)
 	a := newTestApp()
 	a.settings.MVBackground = true
 	a.mvStore = newTestMVStore(t, "fake", "mv-frame")
@@ -31,6 +34,7 @@ func TestMVBackgroundFrame(t *testing.T) {
 	}
 	a.mv.frame = frame
 	tr := song("mv-frame", "晴天", "周杰伦")
+	tr.Source = "fake"
 	a.pl.Cue([]music.Track{tr})
 	a.pl.SetLyrics(lyrics.Build(
 		"[00:01]故事的小黄花　从出生那年就飘着\n"+
@@ -53,6 +57,24 @@ func TestMVBackgroundFrame(t *testing.T) {
 	tester.Frame()
 	settled(tester)
 	saveFrame(t, dir, "mv-background.png", tester.Image())
+	compact := ui.NewTester(a.view, 880, 650)
+	compact.SetDark(true)
+	compact.Move(440, 300)
+	settled(compact)
+	saveFrame(t, dir, "mv-background-compact.png", compact.Image())
+}
+
+// 设置搜索可直接定位 MV 分组，截图用于核对选项布局。
+func TestMVSettingsFrame(t *testing.T) {
+	dir := framesDir(t)
+	defer i18n.SetLanguage(i18n.English)
+	i18n.SetLanguage(i18n.Chinese)
+	a := newTestApp()
+	a.settingsPage, a.settingsQuery = "playback", "MV"
+	tester := ui.NewTester(a.settingsView, 900, 850)
+	tester.SetDark(true)
+	settled(tester)
+	saveFrame(t, dir, "mv-settings.png", tester.Image())
 }
 
 // 设置 MM_FRAMES 后保存 MV 搜索面板，供目视核对候选与搜索框。

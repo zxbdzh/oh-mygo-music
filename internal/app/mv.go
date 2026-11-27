@@ -26,6 +26,9 @@ type mvState struct {
 	loading   bool
 	forceSync bool
 	syncAt    time.Time // 上次硬跳的时间，用来做 1 秒冷却
+	pan       ui.Point
+	panKey    string
+	panSize   ui.Point
 }
 
 // mvShown 决定当前视图要不要显示 MV 背景：
@@ -160,7 +163,7 @@ func (a *app) openMV() {
 	if !ok {
 		return
 	}
-	a.mv.key, a.mv.loading, a.mv.err, a.mv.forceSync = key, true, "", true
+	a.mv.key, a.mv.loading, a.mv.err, a.mv.forceSync, a.mv.panKey = key, true, "", true, ""
 
 	// 解析和启动代理都在后台；视图线程只收结果。
 	go func() {

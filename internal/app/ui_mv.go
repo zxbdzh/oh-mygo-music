@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"time"
 
@@ -32,14 +33,59 @@ var mvSearchCandidates = func(ctx context.Context, query, cookie string) ([]mv.C
 	return client.Search(ctx, query)
 }
 
-// mvButton opens the binding panel from either the normal or the immersive layout.
+// mvButton 在 MV 页提供一个入口，已有绑定时把操作收在同一菜单里。
 func (a *app) mvButton(c *ui.Context, tr *music.Track) {
 	if tr == nil || tr.ShowID != "" {
 		return
 	}
-	if pillButton(c.Key("mv-open"), iconVideo, T("Choose MV"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
-		a.openMVDialog(tr)
+	a.ensureMVStore()
+	var binding mv.Binding
+	var bound bool
+	if a.mvStore != nil {
+		binding, bound = a.mvStore.Binding(tr.Source, tr.ID)
 	}
+	label := T("Choose MV")
+	if bound {
+		label = T("Manage MV")
+	}
+	button := pillButton(c.Key("mv-open"), iconVideo, label, ui.RGBA(8, 11, 16, 0.45), white.Alpha(0.9)).Height(30).Label(label)
+	if !bound {
+		if button.Clicked() {
+			a.openMVDialog(tr)
+		}
+		return
+	}
+	services := c.Services()
+	button.Menu(func(menu *ui.Menu) {
+		if menu.Item(T("Change")).Chosen() {
+			a.openMVDialog(tr)
+		}
+		if menu.Item(T("Open source")).Chosen() {
+			services.OpenURL("https://www.bilibili.com/video/" + url.PathEscape(binding.VideoID))
+		}
+		menu.Separator()
+		menu.Item(Tf("Video offset: %+d ms", binding.OffsetMs)).Disabled(true)
+		for _, offset := range []struct {
+			label string
+			delta int
+		}{{"Delay video by 100 ms", -100}, {"Advance video by 100 ms", 100}} {
+			if menu.Item(T(offset.label)).Chosen() {
+				if err := a.mvStore.ChangeOffset(tr.Source, tr.ID, offset.delta); err != nil {
+					a.toast = T("Couldn't save the MV.")
+				} else {
+					a.mv.forceSync = true
+				}
+			}
+		}
+		menu.Separator()
+		if menu.Item(T("Remove")).Chosen() {
+			if err := a.mvStore.DeleteBinding(tr.Source, tr.ID); err != nil {
+				a.toast = T("Couldn't save the MV.")
+			} else {
+				a.closeMV()
+			}
+		}
+	})
 }
 
 func (a *app) openMVDialog(tr *music.Track) {

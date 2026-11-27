@@ -2,7 +2,6 @@ package app
 
 import (
 	"math"
-	"net/url"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -320,7 +319,12 @@ func (a *app) nowPlayingView(c *ui.Context) {
 		})
 		// Over the backdrop, which is positioned too: positioned elements
 		// paint over those in the flow.
-		ui.Column(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Children(func() { a.nowPlayingBody(c, tr, art, accent, w, h, pointerIn) })
+		body := ui.Column(c).Absolute().Top(0).Left(0).Right(0).Bottom(0)
+		if a.mvShown(c) && a.mv.hasBinding(tr) {
+			// 正文的空白区要把指针事件交给画面，歌词和按钮仍可操作。
+			body.PassThrough()
+		}
+		body.Children(func() { a.nowPlayingBody(c, tr, art, accent, w, h, pointerIn) })
 		if a.mvShown(c) {
 			if label := a.mvFailureLabel(tr); label != "" {
 				ui.Row(c.Key("mv-failure")).Absolute().Right(24).Bottom(84).Height(36).Children(func() {
@@ -336,18 +340,45 @@ func (a *app) nowPlayingView(c *ui.Context) {
 // mvLayer 画 MV 背景与暗色遮罩，遮罩的形状照 ECHO：
 // 横向两边重、中间轻，纵向从上到下渐深，让歌词落在画面较暗的区域上。
 func (a *app) mvLayer(c *ui.Context, tr *music.Track, w, h float32) {
-	a.ensureMVStore()
+	a.mvSync(c, tr)
 	if a.mv.player == nil && a.mv.frame == nil {
 		return
 	}
-	a.mvSync(c, tr)
-	ui.Box(c.Key("mv-background")).Absolute().Top(0).Left(0).Right(0).Bottom(0).Children(func() {
+	if a.mv.panKey != a.mv.key || a.mv.panSize.X != w || a.mv.panSize.Y != h {
+		a.mv.panKey = a.mv.key
+		a.mv.panSize = ui.Point{X: w, Y: h}
+		a.mv.pan = ui.Point{X: float32(a.settings.MVPanX) * w / 100, Y: float32(a.settings.MVPanY) * h / 100}
+	}
+	scale := float32(a.settings.MVScale / 100)
+	// 只允许在放大后多出的范围内移动，避免拖出空边。
+	bounds := &ui.Rect{X: -w * (scale - 1) / 2, Y: -h * (scale - 1) / 2, W: w * (scale - 1), H: h * (scale - 1)}
+	ui.Box(c.Key("mv-background")).Absolute().Top(0).Left(0).Right(0).Bottom(0).Clip().Children(func() {
+		var picture ui.Element
 		if a.mv.player != nil {
-			ui.Video(c, a.mv.player).Fill().Fit(ui.Cover).Scale(1.15, 1.15)
-			return
+			picture = ui.Video(c.Key("mv-picture"), a.mv.player)
+		} else {
+			picture = ui.Image(c.Key("mv-picture"), a.mv.frame)
 		}
-		ui.Image(c, a.mv.frame).Fill().Fit(ui.Cover).Scale(1.15, 1.15)
+		picture.Fill().Fit(ui.Cover).Label(T("MV picture")).Blur(float32(a.settings.MVBlur)).Scale(scale, scale).
+			Draggable(&a.mv.pan, ui.DraggableOptions{Bounds: bounds, Rigid: true})
+		if _, _, ended := picture.DragEnded(); ended && w > 0 && h > 0 {
+			panX, panY := float64(a.mv.pan.X/w*100), float64(a.mv.pan.Y/h*100)
+			if panX != a.settings.MVPanX || panY != a.settings.MVPanY {
+				a.settings.MVPanX, a.settings.MVPanY = panX, panY
+				if err := a.settings.save(); err != nil {
+					a.toast = T("Could not save display preferences")
+				}
+			}
+		}
 	})
+	if brightness := float32(a.settings.MVBrightness); brightness != 100 {
+		// shortcut: 叠层近似亮度，MyGo 提供视频色彩滤镜后可改为逐像素调节。
+		tint, opacity := ui.RGB(0, 0, 0), (100-brightness)/100
+		if opacity < 0 {
+			tint, opacity = white, -opacity*0.75
+		}
+		ui.Box(c.Key("mv-brightness")).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().Background(tint.Alpha(opacity))
+	}
 	// 遮罩画在视频上、正文下：0.42 只是暗色主题的下限，不是整体盖一层灰。
 	ui.Box(c.Key("mv-shade")).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().
 		Draw(func(p *ui.Painter, r ui.Rect) {
@@ -363,6 +394,10 @@ func (a *app) mvLayer(c *ui.Context, tr *music.Track, w, h float32) {
 				{Color: ui.RGBA(8, 11, 16, 0.4), At: 1},
 			}}, 0)
 		})
+	if a.settings.MVOverlay > 0 {
+		ui.Box(c.Key("mv-overlay")).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().
+			Background(ui.RGBA(0, 0, 0, float32(a.settings.MVOverlay/100)))
+	}
 }
 
 func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accent ui.Color, w, h float32, pointerIn bool) {
@@ -559,20 +594,17 @@ func (a *app) mvBody(c *ui.Context, tr *music.Track, accent ui.Color, w, h float
 	a.npRise(reveal(npTabsRow(c, w), pointerIn), 0).Children(func() {
 		a.paneTabs(c)
 		a.mvButton(c, tr)
-		a.mvToolbar(c, tr)
 	})
-	// 歌词列居中，最大 620px；顶栏 72px，底部控制条 72px。
-	ui.Column(c).Absolute().Top(72).Left(max((w-620)/2, 24)).Width(min(w-48, 620)).
-		Bottom(72).Children(func() {
-		a.npZoomFusion(c, a.npPane, func() {
-			switch a.npPane {
-			case paneStage:
-				a.stage(c, tr, accent)
-			default:
+	showingVideo := a.mvShown(c) && a.mv.hasBinding(tr) && (a.mv.frame != nil || a.mv.player.Ready())
+	if !a.settings.MVHideLyrics || !showingVideo {
+		// 歌词列居中，最大 620px；顶栏 72px，底部控制条 72px。
+		ui.Column(c).Absolute().Top(72).Left(max((w-620)/2, 24)).Width(min(w-48, 620)).
+			Bottom(72).Children(func() {
+			a.npZoomFusion(c, a.npPane, func() {
 				a.lyricsPane(c, tr, h)
-			}
+			})
 		})
-	})
+	}
 	// 底部控制条：纯色暗调，歌名在左，播控在右，一条细白边分界。
 	ui.Row(c.Key("mv-bar")).Absolute().Left(0).Right(0).Bottom(0).Height(72).
 		Padding(0, 24).AlignItems(ui.Center).Gap(16).
@@ -1106,44 +1138,4 @@ func (a *app) queuePane(c *ui.Context) {
 	}
 	a.queueRows(c, &a.queuePaneView, white)
 	a.queueAt = 0
-}
-
-func (a *app) mvToolbar(c *ui.Context, tr *music.Track) {
-	if tr == nil {
-		return
-	}
-	a.ensureMVStore()
-	if a.mvStore == nil {
-		return
-	}
-	if pillButton(c.Key("mv-change"), nil, T("Change"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
-		a.openMVDialog(tr)
-	}
-	if pillButton(c.Key("mv-remove"), nil, T("Remove"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
-		if err := a.mvStore.DeleteBinding(tr.Source, tr.ID); err != nil {
-			a.toast = T("Couldn't save the MV.")
-			return
-		}
-		a.closeMV()
-	}
-	if pillButton(c.Key("mv-off-"), nil, "-100ms", white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
-		if err := a.mvStore.ChangeOffset(tr.Source, tr.ID, -100); err != nil {
-			a.toast = T("Couldn't save the MV.")
-		} else {
-			a.mv.forceSync = true
-		}
-	}
-	if pillButton(c.Key("mv-off+"), nil, "+100ms", white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
-		if err := a.mvStore.ChangeOffset(tr.Source, tr.ID, 100); err != nil {
-			a.toast = T("Couldn't save the MV.")
-		} else {
-			a.mv.forceSync = true
-		}
-	}
-	if binding, ok := a.mvStore.Binding(tr.Source, tr.ID); ok {
-		link := "https://www.bilibili.com/video/" + url.PathEscape(binding.VideoID)
-		if pillButton(c.Key("mv-open-source"), nil, T("Open source"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
-			go mygo.Shell.OpenExternal(link)
-		}
-	}
 }
