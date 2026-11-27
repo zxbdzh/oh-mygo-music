@@ -66,3 +66,54 @@ func TestMVPluginLoginNeedsConfirmation(t *testing.T) {
 		t.Fatalf("confirmed state %q / %v / %v", a.mvCredential, a.mvFromPlugin, a.mvPluginAvailable)
 	}
 }
+
+// 选过一次「使用插件登录」之后，重启直接复用，不再要求点第二次。
+func TestMVPluginLoginIsRemembered(t *testing.T) {
+	previous := credential.System
+	credential.System = &memoryCredentialStore{values: map[string]string{}}
+	defer func() { credential.System = previous }()
+	withPluginData(t, `{"cookie":"SESSDATA=synthetic; bili_jct=csrf"}`)
+
+	a := newTestApp()
+	a.loadMVLogin()
+	a.useMVPluginLogin()
+	if !a.settings.MVUsePluginLogin {
+		t.Fatal("the choice wasn't remembered")
+	}
+	// 下次启动：新的 app 带着同一条设置，直接复用插件登录。
+	b := newTestApp()
+	b.settings.MVUsePluginLogin = true
+	b.loadMVLogin()
+	if b.mvCredential != "SESSDATA=synthetic; bili_jct=csrf" || !b.mvFromPlugin || b.mvPluginAvailable {
+		t.Fatalf("startup state %q / %v / %v", b.mvCredential, b.mvFromPlugin, b.mvPluginAvailable)
+	}
+}
+
+// 插件自己退出登录后，记住的选择作废，不能拿访客 Cookie 冒充登录。
+func TestMVPluginLoginForgottenWhenPluginSignsOut(t *testing.T) {
+	previous := credential.System
+	credential.System = &memoryCredentialStore{values: map[string]string{}}
+	defer func() { credential.System = previous }()
+	withPluginData(t, `{"cookie":"buvid3=visitor"}`)
+
+	a := newTestApp()
+	a.settings.MVUsePluginLogin = true
+	a.loadMVLogin()
+	if a.mvCredential != "" || a.mvFromPlugin || a.settings.MVUsePluginLogin {
+		t.Fatalf("state %q / %v / %v", a.mvCredential, a.mvFromPlugin, a.settings.MVUsePluginLogin)
+	}
+}
+
+// 停止复用插件登录后，下次启动不再自动读回来。
+func TestMVSignOutForgetsPluginLogin(t *testing.T) {
+	previous := credential.System
+	credential.System = &memoryCredentialStore{values: map[string]string{}}
+	defer func() { credential.System = previous }()
+	a := newTestApp()
+	a.mvCredential, a.mvFromPlugin = "SESSDATA=synthetic", true
+	a.settings.MVUsePluginLogin = true
+	a.signOutMV()
+	if a.mvCredential != "" || a.settings.MVUsePluginLogin {
+		t.Fatalf("state %q / %v", a.mvCredential, a.settings.MVUsePluginLogin)
+	}
+}

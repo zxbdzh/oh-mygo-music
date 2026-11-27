@@ -144,6 +144,9 @@ type settings struct {
 	// 结果足够确定的 MV 直接绑上（门槛见 mv.AutoMatch）。默认开启，
 	// 只有真的在 MV 页签看的时候才联网。
 	MVAutoMatch bool `json:"mvAutoMatch"`
+	// MVUsePluginLogin 记住听众选过「使用插件登录」：下次启动直接复用插件的
+	// B 站登录，不用再点一次；插件自己退出登录后复用自然失效。
+	MVUsePluginLogin bool `json:"mvUsePluginLogin"`
 	// AppIcon is where the app's icon shows on macOS (appIcons); elsewhere
 	// it is always in the notification area.
 	AppIcon string `json:"appIcon"`

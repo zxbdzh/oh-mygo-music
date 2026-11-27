@@ -191,6 +191,11 @@ func (a *app) saveMVLogin(cookie string, account mv.Account) {
 	a.mvAccount = account.Name
 	a.mvFromPlugin = false
 	a.mvLogin.open = false
+	// 自己登录过一次，就不再记住「使用插件登录」。
+	if a.settings.MVUsePluginLogin {
+		a.settings.MVUsePluginLogin = false
+		a.settings.save()
+	}
 	if err := credential.Set(mv.CookieTarget, cookie); err != nil {
 		a.toast = T("Signed in for this session only.")
 	} else if account.Name != "" {
@@ -205,8 +210,11 @@ func (a *app) signOutMV() {
 	}
 	a.mvLogin = mvLoginState{}
 	if a.mvFromPlugin {
-		// 插件的数据不归 MV 管，只停止复用。
+		// 插件的数据不归 MV 管，只停止复用；记得的选择也一并清掉，
+		// 否则下次启动又会自动读回来。
 		a.mvCredential, a.mvAccount, a.mvFromPlugin = "", "", false
+		a.settings.MVUsePluginLogin = false
+		a.settings.save()
 		a.closeMV()
 		a.toast = T("Stopped using the plugin's Bilibili sign-in.")
 		return

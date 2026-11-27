@@ -44,18 +44,27 @@ func mvPluginCookie() string {
 	return ""
 }
 
-// loadMVLogin 先读 MV 自己的凭据；检测到 B 站插件登录时只记下来，
-// 等用户在设置里明确选择后才复用，避免隐式读取插件数据。
+// loadMVLogin 先读 MV 自己的凭据；只装了 B 站插件时，听众选过一次
+// 「使用插件登录」就记住这个选择，下次启动直接复用，不再每次点。
 func (a *app) loadMVLogin() {
 	if cookie, ok, _ := credential.Get(mv.CookieTarget); ok {
 		a.mvCredential = cookie
 		return
 	}
+	if a.settings.MVUsePluginLogin {
+		// 每次启动重新读插件：插件这期间退出登录，这里读不到，复用也作废。
+		if cookie := mvPluginCookie(); cookie != "" {
+			a.mvCredential, a.mvFromPlugin = cookie, true
+			return
+		}
+		a.settings.MVUsePluginLogin = false
+		a.settings.save()
+	}
 	a.mvPluginAvailable = mvPluginCookie() != ""
 }
 
 // useMVPluginLogin 是用户点「使用插件登录」后的动作；点击时重新读取，
-// 插件这期间退出登录就不会复用过期状态。
+// 插件这期间退出登录就不会复用过期状态。选择本身会记住。
 func (a *app) useMVPluginLogin() {
 	cookie := mvPluginCookie()
 	if cookie == "" {
@@ -65,5 +74,7 @@ func (a *app) useMVPluginLogin() {
 	}
 	a.mvCredential, a.mvFromPlugin = cookie, true
 	a.mvPluginAvailable = false
+	a.settings.MVUsePluginLogin = true
+	a.settings.save()
 	a.closeMV()
 }
