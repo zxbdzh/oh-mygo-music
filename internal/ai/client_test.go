@@ -157,3 +157,38 @@ func TestCompleteUsesConfiguredWebTool(t *testing.T) {
 		t.Errorf("tool = %q", got)
 	}
 }
+
+// TestCompleteDoesNotRetryNetworkErrors checks that a connection failure with
+// the web tool on is not retried without it: 重发不会有不同结果。
+func TestCompleteDoesNotRetryNetworkErrors(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := NewClient(Config{BaseURL: srv.URL, Model: "m", WebSearch: true})
+	if _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "hi"}}); err == nil {
+		t.Fatal("want an error")
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1 (no retry on server errors)", calls)
+	}
+}
+
+// TestCompleteRejectsToolCallResponses checks that a service answering with
+// tool_calls instead of text fails clearly instead of returning an empty
+// string: 之前 content 为空会被当作模型没猜出来。
+func TestCompleteRejectsToolCallResponses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"web_search","arguments":"{}"}}]}}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient(Config{BaseURL: srv.URL, Model: "m"})
+	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "hi"}})
+	if err == nil || !strings.Contains(err.Error(), "web_search") {
+		t.Fatalf("err = %v, want a tool-call error naming the tool", err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,14 +22,27 @@ type Config struct {
 	Model   string
 	Timeout time.Duration
 	// WebSearch asks the service for its own web search, when it has one.
+	// 它是服务端执行的内置工具；失败时按服务商约定降级，不视为一般错误。
 	WebSearch     bool
 	WebSearchTool string
 }
 
-// Message is one turn of a completion.
+// Message is one turn of a completion. ToolCalls 只在服务商按 function
+// calling 返回时出现；Content 与它通常互斥，两者都为空说明模型没给结果。
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+}
+
+// ToolCall is the model asking the client to run a hosted tool.
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 // Client asks a service for completions.
@@ -45,10 +59,12 @@ func NewClient(cfg Config) *Client {
 	return &Client{cfg: cfg, http: &http.Client{Timeout: timeout}}
 }
 
-// Complete asks for the reply to messages and returns its text.
+// Complete asks for the reply to messages and returns its text. 带联网工具的
+// 请求只在「服务端不认识这个工具」这一类失败时降级重试；网络断开或密钥无效
+// 重发也不会有不同结果，只会白付一次请求。
 func (c *Client) Complete(ctx context.Context, messages []Message) (string, error) {
 	text, err := c.complete(ctx, messages, c.cfg.WebSearch)
-	if err != nil && c.cfg.WebSearch {
+	if err != nil && c.cfg.WebSearch && toolUnsupported(err) {
 		return c.complete(ctx, messages, false)
 	}
 	return text, err
@@ -97,9 +113,7 @@ func (c *Client) complete(ctx context.Context, messages []Message, web bool) (st
 	}
 	var out struct {
 		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
+			Message Message `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
@@ -108,7 +122,34 @@ func (c *Client) complete(ctx context.Context, messages []Message, web bool) (st
 	if len(out.Choices) == 0 {
 		return "", fmt.Errorf("ai: response has no choices")
 	}
-	return out.Choices[0].Message.Content, nil
+	msg := out.Choices[0].Message
+	if msg.Content == "" && len(msg.ToolCalls) > 0 {
+		// 服务商把内置搜索当 function calling 走：模型在等客户端执行工具，
+		// 但本客户端不执行服务端工具，直接按工具不可用处理。
+		return "", toolCallsUnsupportedError(msg.ToolCalls[0].Function.Name)
+	}
+	return msg.Content, nil
+}
+
+// errToolUnsupported 标记「服务端不认识或不执行联网工具」这一类失败。
+type errToolUnsupported struct{ msg string }
+
+func (e *errToolUnsupported) Error() string { return e.msg }
+
+func toolCallsUnsupportedError(tool string) error {
+	return &errToolUnsupported{msg: fmt.Sprintf("ai: service returned a tool call for %q instead of an answer", tool)}
+}
+
+// toolUnsupported 判断是否值得去掉联网参数重试：HTTP 400/422（参数被拒）或
+// 服务端返回了 tool_calls 等着客户端执行。
+func toolUnsupported(err error) bool {
+	var e *errToolUnsupported
+	if errors.As(err, &e) {
+		return true
+	}
+	// complete() 对非 2xx 用 "ai: <status>: <body>" 文本包装，只看状态码段。
+	text := err.Error()
+	return strings.Contains(text, "ai: 400 ") || strings.Contains(text, "ai: 422 ")
 }
 
 // brief keeps an error body short enough for a settings message.
