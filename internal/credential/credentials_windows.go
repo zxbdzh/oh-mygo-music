@@ -1,4 +1,6 @@
-package plugin
+//go:build windows
+
+package credential
 
 import (
 	"errors"
@@ -36,18 +38,18 @@ type windowsCredential struct {
 	UserName           *uint16
 }
 
-type platformCredentials struct{}
+type platform struct{}
 
-func (platformCredentials) get(target string) (string, bool, error) {
+func (platform) Get(target string) (string, bool, error) {
 	name, err := windows.UTF16PtrFromString(target)
 	if err != nil {
-		return "", false, errCredentialsUnavailable
+		return "", false, ErrUnavailable
 	}
 	if err := credentialRead.Find(); err != nil {
-		return "", false, errCredentialsUnavailable
+		return "", false, ErrUnavailable
 	}
 	if err := credentialFree.Find(); err != nil {
-		return "", false, errCredentialsUnavailable
+		return "", false, ErrUnavailable
 	}
 	var credential *windowsCredential
 	ok, _, callErr := credentialRead.Call(uintptr(unsafe.Pointer(name)), credentialGeneric, 0, uintptr(unsafe.Pointer(&credential)))
@@ -56,14 +58,14 @@ func (platformCredentials) get(target string) (string, bool, error) {
 		if errors.Is(callErr, windows.ERROR_NOT_FOUND) {
 			return "", false, nil
 		}
-		return "", false, errCredentialsUnavailable
+		return "", false, ErrUnavailable
 	}
 	if credential == nil {
-		return "", false, errCredentialsUnavailable
+		return "", false, ErrUnavailable
 	}
 	defer credentialFree.Call(uintptr(unsafe.Pointer(credential)))
-	if credential.CredentialBlobSize > credentialBlobLimit || (credential.CredentialBlobSize != 0 && credential.CredentialBlob == nil) {
-		return "", false, errCredentialsUnavailable
+	if credential.CredentialBlobSize > BlobLimit || (credential.CredentialBlobSize != 0 && credential.CredentialBlob == nil) {
+		return "", false, ErrUnavailable
 	}
 	// GENERIC blob 由应用定义，这里按 UTF-8 原样保存，支持 Cookie 和 JSON 字符串。
 	blob := unsafe.Slice(credential.CredentialBlob, int(credential.CredentialBlobSize))
@@ -72,16 +74,16 @@ func (platformCredentials) get(target string) (string, bool, error) {
 	return value, true, nil
 }
 
-func (platformCredentials) set(target, value string) error {
-	if len(value) > credentialBlobLimit {
-		return errCredentialsUnavailable
+func (platform) Set(target, value string) error {
+	if len(value) > BlobLimit {
+		return ErrUnavailable
 	}
 	name, err := windows.UTF16PtrFromString(target)
 	if err != nil {
-		return errCredentialsUnavailable
+		return ErrUnavailable
 	}
 	if err := credentialWrite.Find(); err != nil {
-		return errCredentialsUnavailable
+		return ErrUnavailable
 	}
 	blob := []byte(value)
 	defer clear(blob)
@@ -98,25 +100,25 @@ func (platformCredentials) set(target, value string) error {
 	runtime.KeepAlive(name)
 	runtime.KeepAlive(blob)
 	if ok == 0 {
-		return errCredentialsUnavailable
+		return ErrUnavailable
 	}
 	return nil
 }
 
-func (platformCredentials) remove(target string) error {
+func (platform) Remove(target string) error {
 	name, err := windows.UTF16PtrFromString(target)
 	if err != nil {
-		return errCredentialsUnavailable
+		return ErrUnavailable
 	}
 	deleteCredential := credentialDLL.NewProc("CredDeleteW")
 	if err := deleteCredential.Find(); err != nil {
-		return errCredentialsUnavailable
+		return ErrUnavailable
 	}
 	ok, _, callErr := deleteCredential.Call(uintptr(unsafe.Pointer(name)), credentialGeneric, 0)
 	runtime.KeepAlive(name)
 	// 重复退出可安全重试；不存在与真正不可访问必须区分。
 	if ok == 0 && !errors.Is(callErr, windows.ERROR_NOT_FOUND) {
-		return errCredentialsUnavailable
+		return ErrUnavailable
 	}
 	return nil
 }

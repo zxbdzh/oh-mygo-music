@@ -6,10 +6,12 @@ import (
 	"errors"
 
 	"github.com/MoeForge/moejs"
+
+	"mygo-music/internal/credential"
 )
 
 // Windows GENERIC 凭据 blob 最多 5*512 字节，在公共边界检查以保持测试与系统一致。
-const credentialBlobLimit = 5 * 512
+const credentialBlobLimit = credential.BlobLimit
 
 // 只允许操作系统保护的存储；测试也只在这个边界替换，不绕过真实 JS 宿主。
 type credentialStore interface {
@@ -21,10 +23,17 @@ type credentialStore interface {
 var systemCredentials credentialStore = platformCredentials{}
 
 var (
-	errCredentialsUnavailable = errors.New("system credential store unavailable")
-	errCredentialsUnsupported = errors.New("system credentials unsupported on this platform")
+	errCredentialsUnavailable = credential.ErrUnavailable
+	errCredentialsUnsupported = credential.ErrUnsupported
 	errCredentialArgument     = errors.New("credentials require a nonempty string key and a string value of at most 2560 bytes")
 )
+
+// platformCredentials 让插件测试继续通过小型接口替换系统凭据。
+type platformCredentials struct{}
+
+func (platformCredentials) get(target string) (string, bool, error) { return credential.Get(target) }
+func (platformCredentials) set(target, value string) error          { return credential.Set(target, value) }
+func (platformCredentials) remove(target string) error              { return credential.Remove(target) }
 
 func (p *Plugin) credentialTarget(key string) string {
 	// Windows 目标名不区分大小写，分别哈希插件和键，避免大小写及分隔符跨域碰撞。
