@@ -372,6 +372,7 @@ func addFake(a *app, src music.Source) *library {
 // newTestApp is an app with one source, a fakeSource called "fake": see fake.
 func newTestApp() *app {
 	a := &app{signInOver: new(atomic.Pointer[mygo.Window]), settings: defaultSettings(), settingText: map[string]*string{}, lyricAt: -1, queueAt: -1}
+	a.aiPrefs = newPreferenceStore("")
 	a.library = addFake(a, newFakeSource("fake"))
 	a.route = route{page: pageHome, src: "fake"}
 	a.art = newArtCache(func(func()) {})

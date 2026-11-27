@@ -10,6 +10,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"mygo-music/internal/ai"
 	"mygo-music/internal/music"
 )
 
@@ -92,8 +93,8 @@ func TestAISuggestionConfirmsBeforeWriting(t *testing.T) {
 	}
 }
 
-// A confirmed like asks for a suggestion and only shows it, until the
-// listener presses the toast's Add.
+// A confirmed like asks for a suggestion and shows it until the listener
+// answers the bar, instead of letting it expire as a toast.
 func TestLikingSuggestsPlaylistAfterSourceConfirms(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
@@ -121,7 +122,7 @@ func TestLikingSuggestsPlaylistAfterSourceConfirms(t *testing.T) {
 	}
 	ch := posts(a)
 	a.likeCurrent()
-	until(t, ch, func() bool { return a.aiToast != nil })
+	until(t, ch, func() bool { return a.aiBar.open })
 	if !liked {
 		t.Fatal("the source was not asked to like the song")
 	}
@@ -130,6 +131,9 @@ func TestLikingSuggestsPlaylistAfterSourceConfirms(t *testing.T) {
 	tt.Frame()
 	if !strings.Contains(strings.Join(tt.Texts(), "\n"), "通勤") {
 		t.Fatalf("texts = %q", tt.Texts())
+	}
+	if a.aiToast != nil {
+		t.Fatal("the suggestion still moved as a toast")
 	}
 
 	var added []string
@@ -372,7 +376,8 @@ func TestAutoSuggestAsksOncePerSong(t *testing.T) {
 	}
 }
 
-// With MM_FRAMES set, saves the AI settings and the suggestion dialog.
+// With MM_FRAMES set, saves the AI settings, the suggestion dialog, the
+// persistent bar after a like, and the adjustment dialog.
 func TestAIFrames(t *testing.T) {
 	dir := framesDir(t)
 
@@ -420,4 +425,18 @@ func TestAIFrames(t *testing.T) {
 	until(t, ch, func() bool { return !b.aiSuggestion.busy })
 	view.Frame()
 	saveFrame(t, dir, "ai-suggestion.png", view.Image())
+
+	bar := newTestApp()
+	bar.aiBar = aiBarState{open: true, lib: bar.library, track: song("1", "夜曲", "周杰伦"), pick: ai.Suggestion{
+		PlaylistID: "10", Confidence: 0.9, Reason: "适合通勤",
+	}, name: "通勤"}
+	barView := ui.NewTester(bar.view, 1200, 800)
+	settled(barView)
+	saveFrame(t, dir, "ai-suggestion-bar.png", barView.Image())
+
+	if err := barView.Click(T("Adjust")); err != nil {
+		t.Fatal(err)
+	}
+	settled(barView)
+	saveFrame(t, dir, "ai-adjust-dialog.png", barView.Image())
 }

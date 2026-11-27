@@ -109,6 +109,9 @@ type app struct {
 	aiSuggestion   aiSuggestionState            // the AI's pick for a song, asked
 	aiToast        *ui.Toast                    // the AI's pick after a like, shown once
 	aiAsked        map[string]bool              // songs already asked about after a like
+	aiBar          aiBarState                   // the suggestion after a like, kept until answered
+	aiRefine       aiRefineState                // talking the suggestion into another playlist
+	aiPrefs        *preferenceStore             // what the AI learned from adopted suggestions
 	deleting       deleteDialog                 // whether to delete a playlist, asked
 	toast          string                       // a message to show once
 	dailySpin      spinState                    // the record on the feature card
@@ -182,6 +185,7 @@ type app struct {
 	comments      commentState
 	tabCount      rollState // the count on the comments' tab, as it rolls
 
+
 	backgroundTasks     []*backgroundTask
 	nextBackgroundTask  uint64
 	backgroundTasksOpen bool
@@ -223,14 +227,20 @@ type app struct {
 	sig                   playerSig
 	quitting              bool
 
-	settings            settings
-	settingsWin         *mygo.Window
-	cacheUsed           int64 // the bytes the song cache takes, -1 until measured
-	updates             bool  // the update plugin is used (useUpdater)
-	shareTokenDraft     string
-	aiKeyDraft          string
-	aiStatus            string
-	aiTesting           bool
+	settings        settings
+	settingsWin     *mygo.Window
+	cacheUsed       int64 // the bytes the song cache takes, -1 until measured
+	updates         bool  // the update plugin is used (useUpdater)
+	shareTokenDraft string
+	aiKeyDraft      string
+	aiStatus        string
+	aiTesting       bool
+	// aiPrefDraft is the text of a preference being added by hand in the
+	// settings, and aiPrefOpen whether its input row shows.
+	aiPrefDraft         string
+	aiPrefOpen          bool
+	aiWebKeyDraft       string
+	aiWebStatus         string
 	shareTokenTemp      string
 	shareTokenTempKey   string
 	shareSettingsStatus string
@@ -444,6 +454,9 @@ func Run() error {
 			go retroBitmaps() // rendered before Now Playing first shows them
 		}
 		a.makeSources()
+		if path, err := preferencesPath(); err == nil {
+			a.aiPrefs = newPreferenceStore(path)
+		}
 		if overrides, err := betterlyrics.NewOverrideStore(userDataDir("betterlyrics-lyrics.json")); err != nil {
 			log.Printf("loading BetterLyrics lyric overrides: %v", err)
 		} else {

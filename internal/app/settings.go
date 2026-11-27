@@ -28,7 +28,10 @@ type settings struct {
 	AIEnabled bool   `json:"aiEnabled"`
 	AIBaseURL string `json:"aiBaseUrl,omitempty"`
 	AIModel   string `json:"aiModel,omitempty"`
-	// AIWebSearch 允许服务商自己的联网增强；默认关闭。
+	// AIWebProvider 联网方式：off 不联网；native 用服务商自己的联网增强；
+	// tavily / anysearch 由应用先搜索再拼进提示词。空值兼容旧配置。
+	AIWebProvider string `json:"aiWebProvider,omitempty"`
+	// AIWebSearch 旧版布尔开关，只读它迁移成 aiWebProvider，不再写入。
 	AIWebSearch bool `json:"aiWebSearch,omitempty"`
 	// AIAutoAdd 高置信度时直接写入；默认关闭。
 	AIAutoAdd bool `json:"aiAutoAdd,omitempty"`
@@ -190,6 +193,11 @@ func loadSettings() settings {
 			json.Unmarshal(b, &s)
 			s.CoverBackdropStyle.Blur = min(100, max(0, s.CoverBackdropStyle.Blur))
 			s.CoverBackdropStyle.Shade = min(100, max(0, s.CoverBackdropStyle.Shade))
+			// 旧版布尔联网开关迁移：开过就当作原生的服务商联网增强；
+			// 新字段已有值时以新字段为准，不再覆盖。
+			if s.AIWebSearch && s.AIWebProvider == "" {
+				s.AIWebProvider = "native"
+			}
 		}
 		s.path = path
 	}
