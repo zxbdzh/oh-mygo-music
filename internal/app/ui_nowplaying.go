@@ -306,7 +306,7 @@ func (a *app) nowPlayingView(c *ui.Context) {
 				if blur {
 					shade.Material(glass.Blur{Radius: radius * 0.65})
 				}
-			case blur:
+		case blur && !(a.mvShown() && a.mv.hasBinding(tr)):
 				// blur.go 只读取 Mask.From/To 端点透明度；从窗口 26% 处向右侧歌词区渐进模糊，保留左侧清晰封面光影。
 				ui.Box(c.Key("np-pane-blur")).Absolute().Top(0).Left(w * 0.26).Right(0).Bottom(0).PassThrough().
 					Material(glass.Blur{Radius: radius, Mask: &ui.LinearGradient{From: ui.Transparent, To: ui.RGB(0, 0, 0), Angle: 90}})
