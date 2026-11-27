@@ -80,6 +80,7 @@ func (a *app) view(c *ui.Context) {
 						// The bars float over the page, which scrolls under them:
 						// positioned, they paint over it.
 						a.pageTop(c)
+						a.suggestionBar(c, a.pal, playerBarHeight+4)
 						a.playerBar(c)
 					})
 				})
@@ -92,6 +93,7 @@ func (a *app) view(c *ui.Context) {
 	a.installDialog(c, a.pal)
 	a.playlistNameDialog(c)
 	a.aiSuggestionDialog(c)
+	a.aiRefineDialog(c)
 	a.deletePlaylistDialog(c)
 	a.shareDialog(c)
 	a.downloadPromptDialog(c)
