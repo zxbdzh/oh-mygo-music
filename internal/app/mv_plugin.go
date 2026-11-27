@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mygo-music/internal/credential"
 	"mygo-music/internal/mv"
 )
 
@@ -41,4 +42,28 @@ func mvPluginCookie() string {
 		}
 	}
 	return ""
+}
+
+// loadMVLogin 先读 MV 自己的凭据；检测到 B 站插件登录时只记下来，
+// 等用户在设置里明确选择后才复用，避免隐式读取插件数据。
+func (a *app) loadMVLogin() {
+	if cookie, ok, _ := credential.Get(mv.CookieTarget); ok {
+		a.mvCredential = cookie
+		return
+	}
+	a.mvPluginAvailable = mvPluginCookie() != ""
+}
+
+// useMVPluginLogin 是用户点「使用插件登录」后的动作；点击时重新读取，
+// 插件这期间退出登录就不会复用过期状态。
+func (a *app) useMVPluginLogin() {
+	cookie := mvPluginCookie()
+	if cookie == "" {
+		a.mvPluginAvailable = false
+		a.toast = T("The Bilibili plugin is not signed in anymore.")
+		return
+	}
+	a.mvCredential, a.mvFromPlugin = cookie, true
+	a.mvPluginAvailable = false
+	a.closeMV()
 }

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo"
+
+	"mygo-music/internal/credential"
 )
 
 func withPluginData(t *testing.T, storage string) {
@@ -44,5 +46,23 @@ func TestMVPluginCookieIgnoresAnonymousStorage(t *testing.T) {
 		if got := mvPluginCookie(); got != "" {
 			t.Fatalf("anonymous storage %q produced %q", storage, got)
 		}
+	}
+}
+
+// 启动时只标记插件可复用，用户点了才真正使用插件登录。
+func TestMVPluginLoginNeedsConfirmation(t *testing.T) {
+	previous := credential.System
+	credential.System = &memoryCredentialStore{values: map[string]string{}}
+	defer func() { credential.System = previous }()
+	withPluginData(t, `{"cookie":"SESSDATA=synthetic; bili_jct=csrf"}`)
+
+	a := newTestApp()
+	a.loadMVLogin()
+	if a.mvCredential != "" || a.mvFromPlugin || !a.mvPluginAvailable {
+		t.Fatalf("startup state %q / %v / %v", a.mvCredential, a.mvFromPlugin, a.mvPluginAvailable)
+	}
+	a.useMVPluginLogin()
+	if a.mvCredential != "SESSDATA=synthetic; bili_jct=csrf" || !a.mvFromPlugin || a.mvPluginAvailable {
+		t.Fatalf("confirmed state %q / %v / %v", a.mvCredential, a.mvFromPlugin, a.mvPluginAvailable)
 	}
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"mygo-music/internal/betterlyrics"
-	"mygo-music/internal/credential"
 	"mygo-music/internal/i18n"
 	"mygo-music/internal/local"
 	"mygo-music/internal/music"
@@ -188,13 +187,14 @@ type app struct {
 	tabCount      rollState // the count on the comments' tab, as it rolls
 
 	// mv 是在线 MV 背景：绑定、解析结果与正在播放的静音视频。
-	mv           mvState
-	mvStore      *mv.Store
-	mvCredential string
-	mvFromPlugin bool // 复用了 B 站插件的登录，退出时不能删除插件数据
-	mvDialog     mvDialogState
-	mvLogin      mvLoginState
-	mvAccount    string
+	mv                mvState
+	mvStore           *mv.Store
+	mvCredential      string
+	mvFromPlugin      bool // 复用了 B 站插件的登录，退出时不能删除插件数据
+	mvPluginAvailable bool // 检测到 B 站插件已登录，等用户确认是否复用
+	mvDialog          mvDialogState
+	mvLogin           mvLoginState
+	mvAccount         string
 
 	backgroundTasks     []*backgroundTask
 	nextBackgroundTask  uint64
@@ -465,12 +465,7 @@ func Run() error {
 		}
 		a.makeSources()
 		// 登录 Cookie 只从系统凭据库读入内存；失败时按未登录继续。
-		if cookie, ok, _ := credential.Get(mv.CookieTarget); ok {
-			a.mvCredential = cookie
-		} else if cookie := mvPluginCookie(); cookie != "" {
-			// 没在 MV 里单独登录时，跟随已安装 B 站插件的登录态。
-			a.mvCredential, a.mvFromPlugin = cookie, true
-		}
+		a.loadMVLogin()
 		if path, err := preferencesPath(); err == nil {
 			a.aiPrefs = newPreferenceStore(path)
 		}

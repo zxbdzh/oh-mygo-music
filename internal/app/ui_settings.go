@@ -739,6 +739,8 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 			if a.mvAccount != "" {
 				account = Tf("Signed in as %s", a.mvAccount)
 			}
+		} else if a.mvPluginAvailable {
+			account = T("The Bilibili plugin is signed in.")
 		}
 		row(T("Bilibili Account"), account, func() {
 			if a.mvCredential != "" {
@@ -747,9 +749,15 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 				}
 				return
 			}
-			if pillButton(c.Key("mv-account-in"), nil, T("Sign In"), p.accent, p.onAccent).Clicked() {
-				a.openMVLoginInline()
-			}
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				// 插件登录只作建议，用户点了才复用。
+				if a.mvPluginAvailable && pillButton(c.Key("mv-account-plugin"), nil, T("Use the plugin's sign-in"), p.hover.Over(p.bg), p.text).Clicked() {
+					a.useMVPluginLogin()
+				}
+				if pillButton(c.Key("mv-account-in"), nil, T("Sign In"), p.accent, p.onAccent).Clicked() {
+					a.openMVLoginInline()
+				}
+			})
 		})
 		// 设置是独立窗口，登录内容在分组里展开，主窗口的弹窗看不到这里。
 		block(T("Bilibili Account"), func() {
