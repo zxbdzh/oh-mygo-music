@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -472,6 +473,17 @@ func TestAIFrames(t *testing.T) {
 	settled(foldedView)
 	saveFrame(t, dir, "ai-task-card.png", foldedView.Image())
 
+	// 手动入口失败：说明没猜出来，并提供直接重试。
+	failed := newTestApp()
+	failed.aiSuggestion = aiSuggestionState{
+		open: true, failed: true, stage: aiBarDone,
+		track: song("1", "夜曲", "周杰伦"), lib: failed.library,
+		query: "夜曲 周杰伦",
+	}
+	failedView := ui.NewTester(failed.view, 1200, 800)
+	settled(failedView)
+	saveFrame(t, dir, "ai-suggestion-failed.png", failedView.Image())
+
 	bar := newTestApp()
 	bar.aiBar = aiBarState{open: true, stage: aiBarDone, lib: bar.library,
 		track: song("1", "夜曲", "周杰伦"), pick: ai.Suggestion{
@@ -672,6 +684,46 @@ func TestFoldingManualSuggestionRunsInTaskCenter(t *testing.T) {
 	until(t, ch, func() bool { return len(added) == 1 })
 	if added[0] != "10" || len(a.backgroundTasks) != 0 {
 		t.Fatalf("added = %v, tasks = %d", added, len(a.backgroundTasks))
+	}
+}
+
+// A failed manual suggestion can be retried in place, and the retry clears
+// the failure once the model answers.
+func TestManualSuggestionRetriesAfterFailure(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"content": `{"playlist_id":"10","confidence":0.9,"reason":"适合通勤"}`,
+			}}},
+		})
+	}))
+	defer srv.Close()
+
+	a := newTestApp()
+	a.settings.AIEnabled = true
+	a.settings.AIBaseURL = srv.URL
+	a.settings.AIModel = "m"
+	a.mine = []music.Playlist{{ID: "10", Name: "通勤", Mine: true}}
+	tr := song("1", "夜曲", "周杰伦")
+	a.playlists["42"] = &music.Playlist{ID: "42", Name: "List", Tracks: []music.Track{tr}}
+	a.route = route{page: pagePlaylist, src: "fake", id: "42"}
+
+	ch := posts(a)
+	a.openAISuggestion(&tr)
+	until(t, ch, func() bool { return !a.aiSuggestion.busy && a.aiSuggestion.failed })
+	tt := ui.NewTester(a.view, 1200, 800)
+	settled(tt)
+	if err := tt.Click(T("Retry")); err != nil {
+		t.Fatal(err)
+	}
+	until(t, ch, func() bool { return !a.aiSuggestion.busy && a.aiSuggestion.stage == aiBarDone })
+	if a.aiSuggestion.failed || a.aiSuggestion.name != "通勤" {
+		t.Fatalf("retry kept the failure: failed=%v name=%q", a.aiSuggestion.failed, a.aiSuggestion.name)
 	}
 }
 

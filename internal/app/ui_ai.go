@@ -251,6 +251,24 @@ func (a *app) foldAISuggestion() {
 	a.redraw()
 }
 
+// retryAISuggestion asks again for the same song after a failed manual
+// request, dropping the failed card if the dialog was folded meanwhile.
+func (a *app) retryAISuggestion() {
+	d := &a.aiSuggestion
+	if d.track.ID == "" {
+		return
+	}
+	tr := d.track
+	if d.cancel != nil {
+		d.cancel()
+	}
+	if task := d.task; task != nil {
+		a.removeBackgroundTask(task)
+	}
+	a.aiSuggestion = aiSuggestionState{}
+	a.openAISuggestion(&tr)
+}
+
 // dropAISuggestion cancels the manual request and forgets a folded task.
 func (a *app) dropAISuggestion() {
 	d := &a.aiSuggestion
@@ -972,7 +990,12 @@ func (a *app) aiSuggestionDialog(c *ui.Context) {
 						if pillButton(c.Key("ai-fold"), nil, T("Fold"), p.hover.Over(p.bg), p.text).Clicked() {
 							a.foldAISuggestion()
 						}
-					} else if !d.failed {
+					} else if d.failed {
+						// 失败不必关掉弹窗再从头点一遍，原地再问一次。
+						if pillButton(c.Key("ai-suggestion-retry"), nil, T("Retry"), p.accent, p.onAccent).Clicked() {
+							a.retryAISuggestion()
+						}
+					} else {
 						if pillButton(c.Key("ai-suggestion-adjust"), nil, T("Adjust"), p.hover.Over(p.bg), p.text).Clicked() {
 							a.openAIRefineFromSuggestion()
 						}
