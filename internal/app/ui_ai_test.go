@@ -425,6 +425,11 @@ func TestAIFrames(t *testing.T) {
 	until(t, ch, func() bool { return !b.aiSuggestion.busy })
 	view.Frame()
 	saveFrame(t, dir, "ai-suggestion.png", view.Image())
+	if err := view.Click("Adjust"); err != nil {
+		t.Fatal(err)
+	}
+	settled(view)
+	saveFrame(t, dir, "ai-suggestion-adjust.png", view.Image())
 
 	bar := newTestApp()
 	bar.aiBar = aiBarState{open: true, lib: bar.library, track: song("1", "夜曲", "周杰伦"), pick: ai.Suggestion{

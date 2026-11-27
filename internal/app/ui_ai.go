@@ -471,6 +471,7 @@ func (a *app) autoSuggestPlaylist(lib *library, tr music.Track) {
 // suggestion go.
 func (a *app) addSuggested(lib *library, tr *music.Track, pick ai.Suggestion) {
 	a.aiBar.open = false
+	a.aiSuggestion.open = false
 	a.aiRefine.open = false
 	a.addTo(lib, pick.PlaylistID, tr)
 }
@@ -479,6 +480,7 @@ func (a *app) addSuggested(lib *library, tr *music.Track, pick ai.Suggestion) {
 // session, as aiAsked already keeps it from being asked again.
 func (a *app) closeSuggestion() {
 	a.aiBar = aiBarState{}
+	a.aiSuggestion.open = false
 	a.aiRefine = aiRefineState{}
 	a.redraw()
 }
@@ -584,6 +586,9 @@ func (a *app) aiSuggestionDialog(c *ui.Context) {
 						d.open = false
 					}
 					if !d.busy && !d.failed {
+						if pillButton(c.Key("ai-suggestion-adjust"), nil, T("Adjust"), p.hover.Over(p.bg), p.text).Clicked() {
+							a.openAIRefineFromSuggestion()
+						}
 						if pillButton(c.Key("ai-add"), nil, T("Add"), p.accent, p.onAccent).Clicked() {
 							d.open = false
 							a.addTo(d.lib, d.pick.PlaylistID, &d.track)
@@ -597,22 +602,35 @@ func (a *app) aiSuggestionDialog(c *ui.Context) {
 
 // openAIRefine starts the conversation about the suggestion on screen.
 func (a *app) openAIRefine() {
-	b := a.aiBar
-	if !b.open {
+	if a.aiBar.open {
+		a.openAIRefineFrom(a.aiBar.track, a.aiBar.lib, a.aiBar.pick, a.aiBar.name)
+	}
+}
+
+// openAIRefineFromSuggestion starts the same conversation from the manual
+// dialog: 手动入口和喜欢后的推荐条用同一套调整流程。
+func (a *app) openAIRefineFromSuggestion() {
+	d := a.aiSuggestion
+	if d.open {
+		a.openAIRefineFrom(d.track, d.lib, d.pick, d.name)
+	}
+}
+
+func (a *app) openAIRefineFrom(tr music.Track, lib *library, pick ai.Suggestion, name string) {
+	if lib == nil {
 		return
 	}
-	lib := b.lib
 	a.aiRefine = aiRefineState{
 		open:    true,
-		track:   b.track,
+		track:   tr,
 		lib:     lib,
-		history: []ai.Message{{Role: "assistant", Content: suggestionJSON(b.pick)}},
-		pick:    b.pick,
-		name:    b.name,
+		history: []ai.Message{{Role: "assistant", Content: suggestionJSON(pick)}},
+		pick:    pick,
+		name:    name,
 		prefs:   a.aiPreferenceTexts(lib),
 	}
 	go func() {
-		candidates := a.aiCandidates(lib, &b.track, 100)
+		candidates := a.aiCandidates(lib, &tr, 100)
 		a.post(func() {
 			a.aiRefine.candidates = candidates
 		})

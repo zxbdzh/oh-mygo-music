@@ -167,3 +167,66 @@ func TestAdjustAdoptsAndLearns(t *testing.T) {
 		t.Errorf("learned = %+v", prefs)
 	}
 }
+
+// The manual AI dialog can also be adjusted before it writes anything.
+func TestManualSuggestionCanBeAdjusted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"content": `{"playlist_id":"11","confidence":0.95,"reason":"更安静"}`,
+			}}},
+		})
+	}))
+	defer srv.Close()
+
+	a := newTestApp()
+	a.settings.AIEnabled = true
+	a.settings.AIBaseURL = srv.URL
+	a.settings.AIModel = "m"
+	a.account = &music.Account{ID: "u1"}
+	a.libs[0].account = &music.Account{ID: "u1"}
+	a.mine = []music.Playlist{{ID: "10", Name: "通勤", Mine: true}, {ID: "11", Name: "睡前", Mine: true}}
+	a.aiSuggestion = aiSuggestionState{open: true, lib: a.library, track: song("1", "夜曲"), pick: ai.Suggestion{PlaylistID: "10"}, name: "通勤"}
+
+	var added []string
+	f := fake(a)
+	f.addTo = func(id string, tracks []string) error {
+		added = append(added, id)
+		return nil
+	}
+	ch := posts(a)
+	tt := ui.NewTester(a.view, 1200, 800)
+	settled(tt)
+	if err := tt.Click(T("Adjust")); err != nil {
+		t.Fatalf("%v; texts = %q", err, tt.Texts())
+	}
+	until(t, ch, func() bool { return len(a.aiRefine.candidates) == 2 })
+	settled(tt)
+
+	n, ok := tt.AccessByRole(ui.RoleTextField, T("How should it change?"))
+	if !ok {
+		t.Fatalf("no adjustment field: %q", tt.Texts())
+	}
+	r := n.Bounds
+	tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+	tt.Type("太吵了，换安静一点的")
+	if err := tt.Click(T("Send")); err != nil {
+		t.Fatal(err)
+	}
+	until(t, ch, func() bool { return a.aiRefine.learned != "" })
+	settled(tt)
+	if err := tt.Click(T("Use This")); err != nil {
+		t.Fatalf("%v; texts = %q", err, tt.Texts())
+	}
+	until(t, ch, func() bool { return len(added) == 1 })
+	if added[0] != "11" {
+		t.Errorf("added = %v, want the refined 11", added)
+	}
+	if a.aiSuggestion.open {
+		t.Error("the manual suggestion stayed open after adopting")
+	}
+	prefs := a.aiPrefs.forListener("fake", "u1")
+	if len(prefs) != 1 || prefs[0].Text != "太吵了，换安静一点的" {
+		t.Errorf("learned = %+v", prefs)
+	}
+}
