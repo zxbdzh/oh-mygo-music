@@ -33,6 +33,32 @@ func TestStoreBindingRoundTrip(t *testing.T) {
 	}
 }
 
+// ChangeOffset persists bounded per-track alignment values across restarts.
+func TestStoreChangeOffset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mv.json")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutBinding(Binding{Source: "net", TrackID: "42", VideoID: "BV1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ChangeOffset("net", "42", 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ChangeOffset("net", "42", 700000); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, ok := reopened.Binding("net", "42")
+	if !ok || binding.OffsetMs != 600000 {
+		t.Fatalf("binding %+v, want offset 600000", binding)
+	}
+}
+
 func TestStoreResolvedExpires(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "mv.json"))
 	if err != nil {

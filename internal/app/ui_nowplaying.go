@@ -2,6 +2,7 @@ package app
 
 import (
 	"math"
+	"net/url"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -1108,19 +1109,41 @@ func (a *app) queuePane(c *ui.Context) {
 }
 
 func (a *app) mvToolbar(c *ui.Context, tr *music.Track) {
+	if tr == nil {
+		return
+	}
+	a.ensureMVStore()
+	if a.mvStore == nil {
+		return
+	}
 	if pillButton(c.Key("mv-change"), nil, T("Change"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
 		a.openMVDialog(tr)
 	}
 	if pillButton(c.Key("mv-remove"), nil, T("Remove"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
-		a.ensureMVStore()
-		a.mvStore.DeleteBinding(tr.Source, tr.ID)
+		if err := a.mvStore.DeleteBinding(tr.Source, tr.ID); err != nil {
+			a.toast = T("Couldn't save the MV.")
+			return
+		}
 		a.closeMV()
 	}
-}
 	if pillButton(c.Key("mv-off-"), nil, "-100ms", white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
-		a.mvStore.ChangeOffset(tr.Source, tr.ID, -100)
+		if err := a.mvStore.ChangeOffset(tr.Source, tr.ID, -100); err != nil {
+			a.toast = T("Couldn't save the MV.")
+		} else {
+			a.mv.forceSync = true
+		}
 	}
 	if pillButton(c.Key("mv-off+"), nil, "+100ms", white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
-		a.mvStore.ChangeOffset(tr.Source, tr.ID, 100)
+		if err := a.mvStore.ChangeOffset(tr.Source, tr.ID, 100); err != nil {
+			a.toast = T("Couldn't save the MV.")
+		} else {
+			a.mv.forceSync = true
+		}
+	}
+	if binding, ok := a.mvStore.Binding(tr.Source, tr.ID); ok {
+		link := "https://www.bilibili.com/video/" + url.PathEscape(binding.VideoID)
+		if pillButton(c.Key("mv-open-source"), nil, T("Open source"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
+			go mygo.Shell.OpenExternal(link)
+		}
 	}
 }

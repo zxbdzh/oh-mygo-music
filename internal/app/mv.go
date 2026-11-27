@@ -18,13 +18,14 @@ import (
 // 只有真的在放 MV 时才持有播放器与代理：解码器会一直占着显存和带宽，
 // 切歌、关闭视图或退出时都要放掉。
 type mvState struct {
-	key     string // 当前播放器的绑定键，Source\0TrackID
-	player  *ui.VideoPlayer
-	frame   *ui.Bitmap // 解码前与无头测试的占位画面
-	proxy   *mv.Proxy
-	err     string
-	loading bool
-	syncAt  time.Time // 上次硬跳的时间，用来做 1 秒冷却
+	key       string // 当前播放器的绑定键，Source\0TrackID
+	player    *ui.VideoPlayer
+	frame     *ui.Bitmap // 解码前与无头测试的占位画面
+	proxy     *mv.Proxy
+	err       string
+	loading   bool
+	forceSync bool
+	syncAt    time.Time // 上次硬跳的时间，用来做 1 秒冷却
 }
 
 // mvShown 决定当前视图要不要显示 MV 背景：
@@ -76,13 +77,30 @@ func (a *app) mvSync(c *ui.Context, tr *music.Track) {
 		c.After(120 * time.Millisecond)
 		return
 	}
-	// 暂停时画面冻结在当前帧，不跟随。
-	if a.pl.Playing() {
-		target := a.pl.Position() + time.Duration(a.mvOffset(tr))*time.Millisecond
-		if dur := p.Duration(); dur > 0 {
-			// 视频循环，按视频时长取模定位，MV 比歌短时也有画面。
-			target = ((target % dur) + dur) % dur
+	target := a.pl.Position() + time.Duration(a.mvOffset(tr))*time.Millisecond
+	if dur := p.Duration(); dur > 0 {
+		// 视频循环，按视频时长取模定位，MV 比歌短时也有画面。
+		target = ((target % dur) + dur) % dur
+	}
+	if !a.pl.Playing() {
+		p.Pause()
+		if st.forceSync {
+			p.Seek(target)
+			p.SetRate(1)
+			st.forceSync = false
 		}
+		return
+	}
+	if !p.Playing() {
+		p.Play()
+		st.forceSync = true
+	}
+	if st.forceSync {
+		p.Seek(target)
+		p.SetRate(1)
+		st.syncAt = c.Now()
+		st.forceSync = false
+	} else {
 		drift := target - p.Position()
 		switch {
 		case drift >= mvTolerance && drift < mvHardSeek:
@@ -142,7 +160,7 @@ func (a *app) openMV() {
 	if !ok {
 		return
 	}
-	a.mv.key, a.mv.loading, a.mv.err = key, true, ""
+	a.mv.key, a.mv.loading, a.mv.err, a.mv.forceSync = key, true, "", true
 
 	// 解析和启动代理都在后台；视图线程只收结果。
 	go func() {

@@ -492,6 +492,7 @@ func Run() error {
 		a.pl.SleepEnded = func() { a.clearSleepTimer() }
 		a.restoreDownloads()
 		a.pl.Changed = func() {
+			a.mv.forceSync = true
 			if draft := a.sharing; draft != nil && draft.clipPreviewActive && a.pl.Playing() {
 				a.stopSharePreview(draft)
 			}
