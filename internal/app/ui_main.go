@@ -95,6 +95,7 @@ func (a *app) view(c *ui.Context) {
 	a.playlistNameDialog(c)
 	a.aiSuggestionDialog(c)
 	a.aiRefineDialog(c)
+	a.mvDialogView(c)
 	a.deletePlaylistDialog(c)
 	a.shareDialog(c)
 	a.downloadPromptDialog(c)

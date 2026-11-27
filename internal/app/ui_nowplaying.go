@@ -273,9 +273,8 @@ func (a *app) nowPlayingView(c *ui.Context) {
 		// 在线 MV 背景：歌有绑定且当前视图该显示时，静音视频铺在最底层。
 		// 无绑定或关闭时保持原封面背景，不占解码器。
 		if a.mvShown() {
-			a.mvLayer(c, tr, w, h)
-		} else {
 			a.openMV()
+			a.mvLayer(c, tr, w, h)
 		}
 		// Its colors bloom out of the bar's cover as it opens.
 		bloom := ui.Box(c.Key("bloom")).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough()
@@ -306,7 +305,7 @@ func (a *app) nowPlayingView(c *ui.Context) {
 				if blur {
 					shade.Material(glass.Blur{Radius: radius * 0.65})
 				}
-		case blur && !(a.mvShown() && a.mv.hasBinding(tr)):
+			case blur && !(a.mvShown() && a.mv.hasBinding(tr)):
 				// blur.go 只读取 Mask.From/To 端点透明度；从窗口 26% 处向右侧歌词区渐进模糊，保留左侧清晰封面光影。
 				ui.Box(c.Key("np-pane-blur")).Absolute().Top(0).Left(w * 0.26).Right(0).Bottom(0).PassThrough().
 					Material(glass.Blur{Radius: radius, Mask: &ui.LinearGradient{From: ui.Transparent, To: ui.RGB(0, 0, 0), Angle: 90}})
@@ -401,6 +400,7 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 			// controls a slim bar at the foot.
 			a.npRise(reveal(npTabsRow(c, w), pointerIn), 0).Children(func() {
 				a.paneTabs(c)
+				a.mvButton(c, tr)
 				a.stageStyleButton(c)
 				a.stageLanguageButton(c)
 			})
@@ -424,6 +424,7 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 		padX := npSideX(w)
 		a.npRise(reveal(npTabsRow(c, w), pointerIn), 0).Children(func() {
 			a.paneTabs(c)
+			a.mvButton(c, tr)
 			if tr.ShowID == "" {
 				a.lyricDisplayButton(c, tr)
 			}
@@ -535,6 +536,7 @@ func (a *app) mvBody(c *ui.Context, tr *music.Track, accent ui.Color, w, h float
 	// 顶部保留关闭按钮，不另加标题行，让画面尽量干净。
 	a.npRise(ui.Row(c).Height(topBar(c)).Justify(ui.Center).AlignItems(ui.Center).DragWindow(), 0).Children(func() {
 		reveal(ui.Box(c.Key("close-reveal")), pointerIn).Children(func() {
+			a.mvButton(c, tr)
 			closeBtn := iconButton(c.Key("close"), iconDown, 18, white.Alpha(0.8), T("Close"))
 			if closeBtn.Clicked() {
 				a.nowPlaying = false

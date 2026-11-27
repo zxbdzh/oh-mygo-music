@@ -190,6 +190,7 @@ type app struct {
 	mv           mvState
 	mvStore      *mv.Store
 	mvCredential string
+	mvDialog     mvDialogState
 
 	backgroundTasks     []*backgroundTask
 	nextBackgroundTask  uint64

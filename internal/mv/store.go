@@ -79,6 +79,26 @@ func (s *Store) PutBinding(b Binding) error {
 	return err
 }
 
+// HasOtherSourceBinding 只用来提示：同名的歌在另一个音源已有 MV。
+// 曲目 ID 跨音源不可比，所以用保存下来的歌名和歌手做弱匹配。
+func (s *Store) HasOtherSourceBinding(source, name, artist string) bool {
+	name, artist = normalize(name), normalize(artist)
+	if name == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, b := range s.data.Bindings {
+		if b.Source == source || normalize(b.TrackName) != name {
+			continue
+		}
+		if artist == "" || normalize(b.TrackArtist) == artist {
+			return true
+		}
+	}
+	return false
+}
+
 // DeleteBinding 解除绑定，并清掉该 MV 的解析缓存。
 func (s *Store) DeleteBinding(source, trackID string) error {
 	s.mu.Lock()

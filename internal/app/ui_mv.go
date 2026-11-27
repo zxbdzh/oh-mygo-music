@@ -1,0 +1,202 @@
+package app
+
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/egoist/mygo/ui"
+
+	"mygo-music/internal/music"
+	"mygo-music/internal/mv"
+)
+
+// mvDialogState 是 MV 绑定面板的状态。搜索和写入绑定都在后台，
+// 结果通过 post 回到主线程，避免网络请求卡住视图。
+type mvDialogState struct {
+	open       bool
+	track      *music.Track
+	query      string
+	busy       bool
+	searchErr  string
+	bindErr    string
+	hint       string
+	candidates []mv.Candidate
+	epoch      uint64
+}
+
+// mvSearchCandidates 是搜索的测试替换点；生产环境直接查 B 站。
+var mvSearchCandidates = func(ctx context.Context, query, cookie string) ([]mv.Candidate, error) {
+	client := mv.NewClient()
+	client.Cookie = cookie
+	return client.Search(ctx, query)
+}
+
+// mvButton opens the binding panel from either the normal or the immersive layout.
+func (a *app) mvButton(c *ui.Context, tr *music.Track) {
+	if tr == nil || tr.ShowID != "" {
+		return
+	}
+	if pillButton(c.Key("mv-open"), iconVideo, T("MV"), white.Alpha(0.1), white.Alpha(0.85)).Clicked() {
+		a.openMVDialog(tr)
+	}
+}
+
+func (a *app) openMVDialog(tr *music.Track) {
+	if tr == nil {
+		return
+	}
+	query := strings.TrimSpace(tr.Name + " " + tr.ArtistNames())
+	track := *tr
+	a.mvDialog = mvDialogState{open: true, track: &track, query: query}
+	a.ensureMVStore()
+	if a.mvStore != nil && a.mvStore.HasOtherSourceBinding(track.Source, track.Name, track.ArtistNames()) {
+		a.mvDialog.hint = T("Another source has an MV for this song.")
+	}
+	a.searchMV()
+}
+
+func (a *app) searchMV() {
+	d := &a.mvDialog
+	query := strings.TrimSpace(d.query)
+	if query == "" || d.track == nil {
+		return
+	}
+	d.epoch++
+	epoch := d.epoch
+	d.busy, d.searchErr, d.bindErr = true, "", ""
+	d.candidates = nil
+	tr := *d.track
+	cookie := a.mvCookie()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		found, err := mvSearchCandidates(ctx, query, cookie)
+		if err != nil {
+			a.post(func() { a.mvSearchDone(epoch, nil, err) })
+			return
+		}
+		ranked := mv.Rank(found, tr.Name, tr.ArtistNames(), time.Duration(tr.Duration)*time.Millisecond, 8)
+		a.post(func() { a.mvSearchDone(epoch, ranked, nil) })
+	}()
+}
+
+func (a *app) mvSearchDone(epoch uint64, candidates []mv.Candidate, err error) {
+	d := &a.mvDialog
+	if epoch != d.epoch {
+		return
+	}
+	d.busy = false
+	if err != nil {
+		d.searchErr = T("Couldn't search Bilibili.")
+		return
+	}
+	d.candidates = candidates
+}
+
+func (a *app) bindMV(c mv.Candidate) {
+	d := &a.mvDialog
+	if d.track == nil {
+		return
+	}
+	a.ensureMVStore()
+	if a.mvStore == nil {
+		d.bindErr = T("Couldn't save the MV.")
+		return
+	}
+	err := a.mvStore.PutBinding(mv.Binding{
+		Source:      d.track.Source,
+		TrackID:     d.track.ID,
+		TrackName:   d.track.Name,
+		TrackArtist: d.track.ArtistNames(),
+		VideoID:     c.VideoID,
+		Title:       c.Title,
+		Uploader:    c.Uploader,
+	})
+	if err != nil {
+		d.bindErr = T("Couldn't save the MV.")
+		return
+	}
+	d.open = false
+	a.closeMV()
+	if a.nowPlaying {
+		a.openMV()
+	}
+}
+
+func (a *app) mvDialogView(c *ui.Context) {
+	p := a.pal
+	d := &a.mvDialog
+	ui.DialogBase(c.Key("mv-binding"), &d.open, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.35))
+		panel.Width(560).Height(460).Padding(20).Radius(18).Gap(12).
+			Background(p.bg).Border(1, p.hairline).Shadow(0, 24, 60, -12, ui.RGBA(0, 0, 0, 0.4)).
+			Transition(ui.ElementTransition{Animation: &ui.Snappy, Enter: &ui.Motion{Scale: 0.94}, Exit: &ui.Motion{Scale: 0.96}})
+		panel.Children(func() {
+			ui.Column(c).Gap(10).Children(func() {
+				ui.Text(c, T("MV Background")).FontSize(17).FontWeight(700)
+				if d.track != nil {
+					ui.Text(c, Tf("Choose an MV for %s", d.track.Name)).FontSize(13).TextColor(p.muted).SingleLine()
+				}
+				if d.hint != "" {
+					ui.Text(c, d.hint).FontSize(12).TextColor(p.muted)
+				}
+				input := ui.TextInput(c.Key("mv-query"), &d.query).Placeholder(T("Song and artist")).FontSize(13)
+				if input.Submitted() {
+					a.searchMV()
+				}
+				if pillButton(c.Key("mv-search"), iconSearch, T("Search"), p.accent, p.onAccent).Clicked() {
+					a.searchMV()
+				}
+				if d.searchErr != "" {
+					ui.Text(c, d.searchErr).FontSize(12).TextColor(p.muted)
+				}
+				if d.bindErr != "" {
+					ui.Text(c, d.bindErr).FontSize(12).TextColor(p.muted)
+				}
+				ui.Scroll(c.Key("mv-candidates")).Grow(1).Children(func() {
+					if d.busy {
+						ui.Text(c, T("Searching…")).FontSize(13).TextColor(p.muted)
+						return
+					}
+					for i, candidate := range d.candidates {
+						row := candidate
+						item := ui.ButtonBase(c.Key(i)).Fill().Column().AlignItems(ui.Start).
+							Padding(10, 12).Radius(10).Gap(3).FocusRing(false).Label(row.Title)
+						if item.Hovered() {
+							item.Background(p.hover.Over(p.bg))
+						}
+						item.Children(func() {
+							ui.Text(c, row.Title).FontSize(13).FontWeight(600).SingleLine()
+							if row.Uploader != "" {
+								ui.Text(c, row.Uploader).FontSize(11).TextColor(p.muted).SingleLine()
+							}
+							if len(row.Reasons) > 0 {
+								ui.Text(c, strings.Join(mvReasons(row.Reasons), " · ")).FontSize(11).TextColor(p.muted).SingleLine()
+							}
+						})
+						if item.Clicked() {
+							a.bindMV(row)
+						}
+					}
+					if !d.busy && len(d.candidates) == 0 && d.searchErr == "" {
+						ui.Text(c, T("No MV found.")).FontSize(13).TextColor(p.muted)
+					}
+				})
+				ui.Row(c).Justify(ui.End).Children(func() {
+					if pillButton(c.Key("mv-close"), nil, T("Close"), p.hover.Over(p.bg), p.text).Clicked() {
+						d.open = false
+					}
+				})
+			})
+		})
+	})
+}
+
+func mvReasons(reasons []string) []string {
+	out := make([]string, len(reasons))
+	for i, reason := range reasons {
+		out[i] = T(reason)
+	}
+	return out
+}

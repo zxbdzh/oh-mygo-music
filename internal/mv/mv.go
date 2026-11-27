@@ -19,13 +19,15 @@ type Candidate struct {
 
 // Binding 是听众确认过的对应关系，键为音源加曲目 ID。
 type Binding struct {
-	Source    string    `json:"source"`
-	TrackID   string    `json:"trackId"`
-	VideoID   string    `json:"videoId"`
-	Title     string    `json:"title,omitempty"`
-	Uploader  string    `json:"uploader,omitempty"`
-	OffsetMs  int       `json:"offsetMs,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Source      string    `json:"source"`
+	TrackID     string    `json:"trackId"`
+	TrackName   string    `json:"trackName,omitempty"`
+	TrackArtist string    `json:"trackArtist,omitempty"`
+	VideoID     string    `json:"videoId"`
+	Title       string    `json:"title,omitempty"`
+	Uploader    string    `json:"uploader,omitempty"`
+	OffsetMs    int       `json:"offsetMs,omitempty"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 // Key 是绑定和缓存的主键。不同音源的曲目 ID 会撞，所以必须带上音源。

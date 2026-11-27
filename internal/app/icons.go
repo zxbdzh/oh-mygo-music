@@ -35,6 +35,7 @@ var (
 	iconCharts    = strokeIcon(`<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>`)
 	iconQueue     = strokeIcon(`<path d="M16 5H3"/><path d="M11 12H3"/><path d="M11 19H3"/><path d="M21 16V5"/><circle cx="18" cy="16" r="3"/>`)
 	iconLyrics    = strokeIcon(`<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/>`)
+	iconVideo     = strokeIcon(`<rect x="3" y="5" width="14" height="14" rx="2"/><path d="m17 10 4-3v10l-4-3z"/>`)
 	iconLink      = strokeIcon(`<path d="M10 13a5 5 0 0 0 7.1 0l3-3a5 5 0 0 0-7.1-7.1l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.1 0l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7"/>`)
 	iconCopy      = strokeIcon(`<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 4H5a2 2 0 0 0-2 2v11"/>`)
 	iconCopyImage = strokeIcon(`<rect x="7" y="7" width="13" height="13" rx="2"/><path d="M4 16H3V5a2 2 0 0 1 2-2h11v1"/><circle cx="11" cy="11" r="1"/><path d="m8 18 4-4 2 2 2-2 3 3"/>`)

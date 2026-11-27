@@ -41,12 +41,13 @@ func (a *app) mvShown() bool {
 	}
 }
 
-// hasBinding 只让已绑定的歌改成 MV 正文；没有 MV 的歌保持原播放页。
+// hasBinding 只让已经解出画面的歌改成 MV 正文；加载中仍显示原播放页，
+// 避免绑定后出现一块没有画面的黑底。
 func (st *mvState) hasBinding(tr *music.Track) bool {
 	if st == nil || tr == nil || st.key != bindingKeyOf(tr) {
 		return false
 	}
-	return st.player != nil || st.frame != nil || st.loading || st.err != ""
+	return st.player != nil || st.frame != nil
 }
 
 // mvSync 让画面跟上音频。

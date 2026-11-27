@@ -9,6 +9,7 @@ import (
 
 	"mygo-music/internal/lyrics"
 	"mygo-music/internal/music"
+	"mygo-music/internal/mv"
 )
 
 // 设置 MM_FRAMES 后保存 MV 背景下的歌词页，供目视核对遮罩与底部控制条。
@@ -50,4 +51,27 @@ func TestMVBackgroundFrame(t *testing.T) {
 	tester.Frame()
 	settled(tester)
 	saveFrame(t, dir, "mv-background.png", tester.Image())
+}
+
+// 设置 MM_FRAMES 后保存 MV 搜索面板，供目视核对候选与搜索框。
+func TestMVSearchFrame(t *testing.T) {
+	dir := framesDir(t)
+	a := newTestApp()
+	tr := song("mv-search", "晴天", "周杰伦")
+	a.pl.Cue([]music.Track{tr})
+	a.nowPlaying, a.npPane = true, paneLyrics
+	a.mvDialog = mvDialogState{
+		open:  true,
+		track: &tr,
+		query: "晴天 周杰伦",
+		candidates: []mv.Candidate{
+			{VideoID: "BV1", Title: "晴天 MV", Uploader: "周杰伦", Reasons: []string{"Title matches", "Artist matches", "MV or official"}},
+			{VideoID: "BV2", Title: "晴天 现场版", Uploader: "周杰伦", Reasons: []string{"Title contains the song", "Artist matches"}},
+			{VideoID: "BV3", Title: "晴天 纯享", Uploader: "音乐搬运", Reasons: []string{"Title contains the song", "Audio-only or non-MV content"}},
+		},
+	}
+	tester := ui.NewTester(a.view, 1180, 780)
+	tester.SetDark(true)
+	settled(tester)
+	saveFrame(t, dir, "mv-search.png", tester.Image())
 }
