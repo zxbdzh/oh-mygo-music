@@ -731,6 +731,11 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 				a.changed()
 			}
 		})
+		row(T("Find MVs Automatically"), T("When a song's MV page opens without an MV yet, search for one and bind it only when the title, length and content type agree. Uses the network."), func() {
+			if ui.Switch(c.Key("mv-auto-match"), &s.MVAutoMatch).Label(T("Find MVs Automatically")).Changed() {
+				a.changed()
+			}
+		})
 		account := T("Sign in to get higher quality MV streams.")
 		if a.mvFromPlugin {
 			account = T("Using the Bilibili plugin's sign-in.")
