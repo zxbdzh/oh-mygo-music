@@ -14,6 +14,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"mygo-music/internal/betterlyrics"
+	"mygo-music/internal/credential"
 	"mygo-music/internal/i18n"
 	"mygo-music/internal/local"
 	"mygo-music/internal/music"
@@ -191,6 +192,8 @@ type app struct {
 	mvStore      *mv.Store
 	mvCredential string
 	mvDialog     mvDialogState
+	mvLogin      mvLoginState
+	mvAccount    string
 
 	backgroundTasks     []*backgroundTask
 	nextBackgroundTask  uint64
@@ -460,6 +463,10 @@ func Run() error {
 			go retroBitmaps() // rendered before Now Playing first shows them
 		}
 		a.makeSources()
+		// 登录 Cookie 只从系统凭据库读入内存；失败时按未登录继续。
+		if cookie, ok, _ := credential.Get(mv.CookieTarget); ok {
+			a.mvCredential = cookie
+		}
 		if path, err := preferencesPath(); err == nil {
 			a.aiPrefs = newPreferenceStore(path)
 		}

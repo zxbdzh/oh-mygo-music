@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"rsc.io/qr"
 
 	"mygo-music/internal/lyrics"
 	"mygo-music/internal/music"
@@ -74,4 +75,19 @@ func TestMVSearchFrame(t *testing.T) {
 	tester.SetDark(true)
 	settled(tester)
 	saveFrame(t, dir, "mv-search.png", tester.Image())
+}
+
+// 设置 MM_FRAMES 后保存 MV 登录面板，供目视核对二维码和 Cookie 输入。
+func TestMVLoginFrame(t *testing.T) {
+	dir := framesDir(t)
+	code, err := qr.Encode("https://example.test/bilibili-login", qr.M)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp()
+	a.mvLogin = mvLoginState{open: true, status: T("Scan with Bilibili."), qrCode: code}
+	tester := ui.NewTester(a.view, 1180, 780)
+	tester.SetDark(true)
+	settled(tester)
+	saveFrame(t, dir, "mv-login.png", tester.Image())
 }

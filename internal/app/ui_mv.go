@@ -134,7 +134,23 @@ func (a *app) mvDialogView(c *ui.Context) {
 			Transition(ui.ElementTransition{Animation: &ui.Snappy, Enter: &ui.Motion{Scale: 0.94}, Exit: &ui.Motion{Scale: 0.96}})
 		panel.Children(func() {
 			ui.Column(c).Gap(10).Children(func() {
-				ui.Text(c, T("MV Background")).FontSize(17).FontWeight(700)
+				ui.Row(c).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, T("MV Background")).FontSize(17).FontWeight(700)
+					ui.Spacer(c)
+					if a.mvCredential != "" {
+						label := T("Bilibili signed in.")
+						if a.mvAccount != "" {
+							label = Tf("Signed in as %s", a.mvAccount)
+						}
+						ui.Text(c, label).FontSize(11).TextColor(p.muted).SingleLine()
+						if pillButton(c.Key("mv-login-out"), nil, T("Sign Out"), p.hover.Over(p.bg), p.text).Clicked() {
+							a.signOutMV()
+						}
+					} else if pillButton(c.Key("mv-login-open"), nil, T("Sign In"), p.hover.Over(p.bg), p.text).Clicked() {
+						a.mvDialog.open = false
+						a.openMVLogin()
+					}
+				})
 				if d.track != nil {
 					ui.Text(c, Tf("Choose an MV for %s", d.track.Name)).FontSize(13).TextColor(p.muted).SingleLine()
 				}
