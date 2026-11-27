@@ -448,6 +448,20 @@ func TestAIFrames(t *testing.T) {
 	}
 	settled(barView)
 	saveFrame(t, dir, "ai-adjust-dialog.png", barView.Image())
+
+	// 依据面板：联网搜到的网页压在最前台，能逐个点开核对。
+	ev := newTestApp()
+	ev.aiBar = aiBarState{open: true, stage: aiBarDone, evidenceOpen: true, lib: ev.library,
+		track: song("1", "夜曲", "周杰伦"), pick: ai.Suggestion{
+			PlaylistID: "10", Confidence: 0.9, Reason: "Eve 的日语流行，慢速抒情",
+		}, name: "流行 日语歌",
+		sources: []websearch.Result{
+			{Title: "心予報 - Eve 歌曲介绍", URL: "https://example.com/1"},
+			{Title: "Eve Smile 专辑曲目", URL: "https://example.com/2"},
+		}}
+	evView := ui.NewTester(ev.view, 1200, 800)
+	settled(evView)
+	saveFrame(t, dir, "ai-evidence.png", evView.Image())
 }
 
 // fakeSearchProvider 是无头测试里的联网桩，只返回预设结果或错误。

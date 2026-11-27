@@ -564,7 +564,8 @@ func (a *app) evidencePanel(c *ui.Context, p palette, bottom float32) {
 	g := shellGlass(p.dark, 0.48, 0.52)
 	panel := ui.Column(c.Key("ai-evidence")).Absolute().Left(16).Right(16).Bottom(bottom + 64).
 		Padding(14).Gap(6).Radius(16).
-		Material(glass.Glass{Style: glass.Regular, Clarity: 0.72, Tint: g.tint}).
+		// 依据面板压在最前台，玻璃调得更实，避免透出下面的播放条显脏。
+		Material(glass.Glass{Style: glass.Regular, Clarity: 0.88, Tint: g.tint}).
 		Border(1, g.border).Shadow(0, 12, 32, -6, g.shade)
 	panel.Children(func() {
 		ui.Text(c, T("Evidence")).FontSize(12).FontWeight(600).TextColor(p.accent)
@@ -601,7 +602,8 @@ func (a *app) suggestionBar(c *ui.Context, p palette, bottom float32) {
 	g := shellGlass(p.dark, 0.48, 0.52)
 	bar := ui.Row(c.Key("ai-suggestion-bar")).Absolute().Left(16).Right(16).Bottom(bottom).Height(56).
 		PaddingX(16).Gap(12).AlignItems(ui.Center).Radius(20).
-		Material(glass.Glass{Style: glass.Regular, Clarity: 0.72, Tint: g.tint}).
+		// 与播放条同款玻璃，但更实：它在最前台，下面就是播放条。
+		Material(glass.Glass{Style: glass.Regular, Clarity: 0.88, Tint: g.tint}).
 		Border(1, g.border).Shadow(0, 12, 32, -6, g.shade)
 	bar.Children(func() {
 		// AI 标记：歌名前的小星形提示这是模型的判断，不是系统通知。

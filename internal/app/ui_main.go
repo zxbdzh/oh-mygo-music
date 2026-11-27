@@ -80,9 +80,10 @@ func (a *app) view(c *ui.Context) {
 						// The bars float over the page, which scrolls under them:
 						// positioned, they paint over it.
 						a.pageTop(c)
+						// 播放条先画，推荐条与依据面板压在最上层：玻璃要盖住播放条的投影，否则会被压暗。
+						a.playerBar(c)
 						a.evidencePanel(c, a.pal, playerBarHeight+4)
 						a.suggestionBar(c, a.pal, playerBarHeight+4)
-						a.playerBar(c)
 					})
 				})
 			})
