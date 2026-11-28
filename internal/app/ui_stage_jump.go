@@ -1952,38 +1952,25 @@ func drawJumpTranslation(c *ui.Context, s stageFrame, course *jumpCourse) {
 	if len(rows) == 0 {
 		return
 	}
-	layouts := make([]*ui.TextLayout, len(rows))
+	lang := c.Locale()
 	var widest float32
-	for i, row := range rows {
-		layouts[i] = ui.ShapeText(row, ui.Font{Size: size, Weight: 500, Lang: c.Locale()}, 0)
-		w, _ := layouts[i].Size()
+	for _, row := range rows {
+		w, _ := c.MeasureText(0, ui.Span{Text: row, Size: size, Weight: 500, Lang: lang})
 		widest = max(widest, w)
 	}
 	scaleX := max(.86, min(1, room/max(1, widest)))
 	lineHeight := size * 1.26
-	amount := jumpTiltAmount(float32(course.config.pitch))
-	// 俯角越大，译文越往下压、越往右上侧倾；每行先斜切、再压扁、最后平移。
-	lean := .18 * amount
-	flatten := 1 - .1*amount
-	stageSceneCanvas(c.Key("jump-translation")).Draw(func(p *ui.Painter, r ui.Rect) {
-		cx := r.X + s.w/2
-		top := r.Y + 6
-		for i, layout := range layouts {
-			x := -widest / 2
-			t := ui.Skewing(float32(-lean*180/math.Pi), 0).
-				Then(ui.Scaling(scaleX, flatten)).
-				Then(ui.Translation(cx, top+float32(i)*lineHeight))
-			p.Transform(t, 0, 0, func() {
-				// 原版译文挂三层主题色光晕（半径 0.55/0.26/0.12 字高），MyGo 的文字阴影就是真模糊；
-				// 旧写法用四个错位字近似，远看没有那圈光。
-				font := ui.Font{Size: size, Weight: 500, Lang: c.Locale()}
-				for _, layer := range [3][2]float32{{.55, .112}, {.26, .196}, {.12, .28}} {
-					shadow := ui.NewTextShadow(0, 0, size*layer[0], s.accent.Alpha(layer[1]))
-					glow := ui.ShapeRichText([]ui.Span{{Text: rows[i], Shadow: shadow}}, font, 0)
-					p.TextLayout(glow, x, 0, s.accent.Alpha(layer[1]))
-				}
-				p.TextLayout(layout, x, 0, white.Alpha(.8))
-			})
+	amount := jumpTiltAmount(course.config.pitch)
+	// 俯角越大，译文越往下压、越往右上侧倾；光晕、纸色投影和正文共用同一个变换。
+	transform := ui.Skewing(float32(-.18*amount*180/math.Pi), 0).Then(ui.Scaling(scaleX, 1-.1*amount))
+	paper := ui.Hex("#0b0b0d") // Android 用播放页 surface；这里用桌面播放页的底色。
+	stageSceneCanvas(c.Key("jump-translation")).Opacity(.8).Children(func() {
+		for i, row := range rows {
+			// 把光留在字外，深色描边托住白字，不在每层阴影里重复画实心字。
+			ui.Text(c, row).Absolute().Left((s.w-scaleX*widest)/2).Top(6+float32(i)*lineHeight).Width(widest+1).
+				NoWrap().FontSize(size).FontWeight(500).Lang(lang).TransformOrigin(0, 0).Transform(transform).
+				TextColor(white).TextStroke(1, paper.Alpha(.65)).TextShadow(0, 1, size*.42, s.accent.Alpha(.28)).
+				PassThrough().AccessHidden(true)
 		}
 	})
 }

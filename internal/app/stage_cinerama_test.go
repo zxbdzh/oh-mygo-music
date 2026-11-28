@@ -1,12 +1,166 @@
 package app
 
 import (
+	"image"
+	"image/color"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"mygo-music/internal/lyrics"
 )
+
+// 描边填色只填已经扫过的一侧，空心一侧仍有跨过切口的独立辉光。
+func TestCineramaFillKeepsOutlineHollow(t *testing.T) {
+	paint := cinPaint{s: stageFrame{preview: true}, geo: cinGeometry{w: 320, h: 240, unit: 1}, accent: white}
+	chunk := cinChunkArt{fontPx: 120, text: cinShape("HH", ui.Font{Size: 120, Weight: 900})}
+	fill := float32(1)
+	var vertical bool
+	tester := ui.NewTester(func(c *ui.Context) {
+		ui.Box(c).Size(320, 240).Background(black).Children(func() {
+			chunk.chunk.fillVertical = vertical
+			paint.showFillChunk(c, &chunk, 160, 120, 1, 1, fill)
+		})
+	}, 320, 240)
+	countBright := func(img *image.RGBA, rect image.Rectangle) int {
+		var n int
+		for y := rect.Min.Y; y < rect.Max.Y; y++ {
+			for x := rect.Min.X; x < rect.Max.X; x++ {
+				if img.RGBAAt(x, y).R >= 200 {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	for _, cfg := range []struct {
+		vertical      bool
+		filled, other image.Rectangle
+	}{
+		{false, image.Rect(0, 0, 156, 240), image.Rect(164, 0, 320, 240)},
+		{true, image.Rect(0, 0, 320, 116), image.Rect(0, 124, 320, 240)},
+	} {
+		fill, vertical = 1, cfg.vertical
+		tester.Frame()
+		wantFill, wantOther := countBright(tester.Image(), cfg.filled), countBright(tester.Image(), cfg.other)
+		fill = .5
+		tester.Frame()
+		gotFill, gotOther := countBright(tester.Image(), cfg.filled), countBright(tester.Image(), cfg.other)
+		if gotFill == 0 || gotFill != wantFill || gotOther == 0 || gotOther >= wantOther/2 {
+			t.Fatalf("纵向=%v：扫过一侧 %d/%d 像素，空心一侧 %d/%d 像素", vertical, gotFill, wantFill, gotOther, wantOther)
+		}
+	}
+	out := tester.Image()
+	paint.s.preview = false
+	tester.Frame()
+	in := tester.Image()
+	for y := 124; y < 240; y++ {
+		for x := 0; x < 320; x++ {
+			if out.RGBAAt(x, y).R == 0 && in.RGBAAt(x, y).R > 10 {
+				return
+			}
+		}
+	}
+	t.Fatal("空心一侧的字形外没有独立的辉光")
+}
+
+// 光晕降到最低档时，字身仍应继续淡出，不能跟着阴影突然消失。
+func TestCineramaInkOutlastsGlow(t *testing.T) {
+	paint := cinPaint{geo: cinGeometry{w: 240, h: 120, unit: 1}, accent: white}
+	text := cinShape("Hold", ui.Font{Size: 64, Weight: 700})
+	tester := ui.NewTester(func(c *ui.Context) {
+		ui.Box(c).Size(240, 120).Background(black).Draw(func(p *ui.Painter, r ui.Rect) {
+			paint.on(p, r).glowText(&text, 25, 60, .04, white.Alpha(.04))
+		})
+	}, 240, 120)
+	img := tester.Image()
+	for y := 20; y < 100; y++ {
+		for x := 25; x < 215; x++ {
+			if img.RGBAAt(x, y).R >= 5 {
+				return
+			}
+		}
+	}
+	t.Fatal("关闭最低档阴影时把仍在淡出的字身一起隐藏了")
+}
+
+// 扫色和位移在退场前逐渐收住，词块仍在原时间窗内进出。
+func TestCineramaChunkSettlesBeforeExit(t *testing.T) {
+	chunk := cinChunk{start: 4, end: 5.2, fill: true, motion: cinStillMotion}
+	if ok, _ := cinChunkLook(chunk, 3.99); ok {
+		t.Fatal("词块提前出现")
+	}
+	if ok, _ := cinChunkLook(chunk, 5.2); ok {
+		t.Fatal("词块越过原来的结束位置")
+	}
+	_, early := cinChunkLook(chunk, 4.3)
+	_, middle := cinChunkLook(chunk, 4.6)
+	_, late := cinChunkLook(chunk, 4.9)
+	if early.fill <= .25 || middle.fill <= early.fill || late.fill >= 1 || late.fill-middle.fill >= middle.fill-early.fill {
+		t.Fatalf("扫色应持续前进且后半段减速：%.3f、%.3f、%.3f", early.fill, middle.fill, late.fill)
+	}
+
+	chunk.fill = false
+	chunk.motion.xFrom = 8
+	_, early = cinChunkLook(chunk, 4.3)
+	_, middle = cinChunkLook(chunk, 4.6)
+	_, late = cinChunkLook(chunk, 4.9)
+	if late.driftX < 0 || middle.driftX >= 4 || middle.driftX-late.driftX >= early.driftX-middle.driftX {
+		t.Fatalf("横向位移应逐渐停稳且不越过中心：%.3f、%.3f、%.3f", early.driftX, middle.driftX, late.driftX)
+	}
+}
+
+// 四边重复刚好走完一圈，按每句抽到的带速滚动，静态模式停住。
+func TestCineramaRingFitsItsPath(t *testing.T) {
+	paint := cinPaint{geo: cinGeometry{w: 960, h: 540, band: 62}}
+	const font = 32
+	const one = "晚风　"
+	ring := paint.buildRing(one, font)
+	wantLap := cinRingLap(960-62, 540-62, .4*62)
+	if ring.copies < 2 || math.Abs(ring.unit*float64(ring.copies)-wantLap) > 1e-5 {
+		t.Fatalf("重复 %d 份，每份 %.2f px，不能覆盖 %.2f px 的路径", ring.copies, ring.unit, wantLap)
+	}
+	base := cinShape(one, ui.Font{Size: font, Weight: 600})
+	wantTrack := (ring.unit - float64(base.w)) / 3
+	wantSecond := float64(base.glyphs[1].X+base.glyphs[1].Advance/2) + wantTrack
+	if len(ring.glyphs) != 2 || math.Abs(ring.glyphs[1].center-wantSecond) > .01 {
+		t.Fatal("去掉空白后的字形位置没有平摊整圈的剩余字距")
+	}
+	for _, speed := range []float64{.12, .2} {
+		m := &cinMarquee{screensPerSec: speed}
+		shift := paint.bandShift(m, .1, ring.unit)
+		if math.Abs(shift*ring.unit-.1*speed*960) > 1e-5 {
+			t.Fatalf("带速 %.2f 时，0.1 秒实际走了 %.2f px", speed, shift*ring.unit)
+		}
+	}
+	paint.still = true
+	if paint.bandShift(&cinMarquee{screensPerSec: .2}, .1, ring.unit) != 0 {
+		t.Fatal("静态模式未停住")
+	}
+}
+
+// 丝带淡边应透出底下已画的内容，而不是覆盖成舞台底色。
+func TestCineramaRibbonMaskRevealsBackground(t *testing.T) {
+	const w, h = 240, 180
+	paint := cinPaint{geo: cinGeometry{w: w, h: h, unit: 1}, accent: ui.RGB(200, 80, 40), still: true}
+	bg := ui.RGB(10, 90, 180)
+	art := &cinRibbonArt{area: ui.Rect{W: w, H: h}, strips: []cinStripArt{{cx: w / 2, cy: h / 2, length: w, thickness: h, textUnit: w}}}
+	tester := ui.NewTester(func(c *ui.Context) {
+		ui.Box(c).Size(w, h).Background(bg).Children(func() {
+			paint.showRibbon(c, art, &cinPlan{}, 0, cinEnvelope{opacity: 1, scale: 1})
+		})
+	}, w, h)
+	img := tester.Image()
+	if got := img.RGBAAt(w/2, h/2); got != (color.RGBA{R: 200, G: 80, B: 40, A: 255}) {
+		t.Fatalf("遮罩不应洗掉带身中央：%v", got)
+	}
+	edge, corner := img.RGBAAt(0, h/2), img.RGBAAt(0, 0)
+	if edge.B < 170 || corner.B < edge.B || corner.R > edge.R {
+		t.Fatalf("遮罩应向四边渐隐且在角落相乘：边 %v，角 %v", edge, corner)
+	}
+}
 
 // 相邻两句不抽到同一种版式，权重为 0 的版式永远不抽。
 func TestCineramaPickStyleAvoidsRepeat(t *testing.T) {

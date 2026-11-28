@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"mygo-music/internal/lyrics"
 	"mygo-music/internal/music"
 )
@@ -36,6 +38,23 @@ func TestMisideFallTurns(t *testing.T) {
 	}
 	if body.rx > misideTiltLimit || body.rx < -misideTiltLimit {
 		t.Errorf("pitch %v outside ±%v", body.rx, misideTiltLimit)
+	}
+}
+
+// 保存带译文的跃动和涟漪，既有舞台样图的示例歌词没有副行。
+func TestJumpRippleShadowFrames(t *testing.T) {
+	dir := framesDir(t)
+	lines := []lyrics.Line{{At: time.Second, End: 5 * time.Second, Text: "星光落在路上", Translation: "Starlight falls across the road\nWe set off together"}}
+	s := stageFrame{lines: lines, current: 0, pos: 2 * time.Second, w: 720, h: 340, accent: ui.Hex("#aab4fa"), motion: 1}
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Box(c).Size(s.w, s.h).Clip().Background(ui.Hex("#343a4a")).Children(func() {
+			(&app{}).renderStageAnimation(c, s)
+		})
+	}, int(s.w), int(s.h))
+	for _, style := range []string{"jump", "ripple"} {
+		s.style = style
+		tt.Frame()
+		saveFrame(t, dir, "shadows-"+style+".png", tt.Image())
 	}
 }
 

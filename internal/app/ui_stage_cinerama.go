@@ -1216,11 +1216,14 @@ func cinChunkLook(c cinChunk, t float64) (ok bool, look cinChunkState) {
 	amount := min(1, span/cinMotionRefSec)
 	glide := 1 + ((1-u)*(m.scaleFrom-1)+u*(m.scaleTo-1))*amount
 	look.opacity = visible
-	look.driftX = m.xFrom * (1 - u) * amount
-	look.driftY = m.yFrom * (1 - u) * amount
+	// 位移先收住，留阅读时间；缩放和字距保持原来的匀速变化。
+	drift := (1 - u) * (1 - u)
+	look.driftX = m.xFrom * drift * amount
+	look.driftY = m.yFrom * drift * amount
 	look.scale = (0.92 + .08*fadeIn) * glide
 	look.trackEm = ((1-u)*m.trackFrom + u*m.trackTo) * amount
-	look.fill = u
+	// 扫色先快后慢，在字块淡出前已接近扫完；进出场仍沿用原歌词窗口。
+	look.fill = u + .65*u*(1-u)
 	return true, look
 }
 

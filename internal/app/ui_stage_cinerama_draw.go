@@ -11,24 +11,22 @@ import (
 )
 
 // 巨幕的画法：一块“屏”（舞台区）上的扫描线、暗角、三种版式的正文和跑马灯带。
-// 排版在每句第一次上屏时量一次、按句缓存，逐帧只换位置、透明度、裁切。
-//
-// 移植取舍（MyGo 没有离屏层 / drawTextOnPath / 字形描边 / 真模糊）：
-// - 组透明度改成把每个色的 alpha 乘下去（文字和光本来就叠在同一处，视觉一致）；缩放用变换绕屏心。
-// - 描边填色的“描边”一侧画成三成透明度的实心字，远看与细描边一致。
-// - 四边的环形文字逐字算圆角矩形上的位置与切线，再逐字旋转贴上去。
-// - 文字辉光交给 MyGo 的真模糊文字阴影，模糊半径按原版 30px（乘屏折算）走。
+// 排版按句缓存；描边和丝带遮罩用 MyGo 元素的原生能力，环形文字按路径切线逐字摆放。
 const (
 	cinSubtitleGapDp = 14
 	cinSubtitleLines = 1.5
 	cinBandFontRatio = .55
 	cinBandTrack     = .12
+	cinBandGlowBlur  = .044
+	cinBandGlowAlpha = .11
 	cinRibbonTrackEm = .05
 	cinRibbonCount   = 6
 	cinClearance     = 1.25
 	cinBandRatio     = .12
 	cinBandTextRatio = 1.6
 	cinGlowRatio     = 30
+	cinWordGlowBlur  = 40
+	cinWordGlowAlpha = .62 // 把光铺在字外，文字描边和填充保留更清楚的亮度层次。
 )
 
 type cinGeometry struct {
@@ -76,6 +74,7 @@ func (t cinText) trackWidth(track float32) float32 {
 type cinCache struct {
 	w, h    float32
 	sig     string
+	still   bool
 	program *cinProgram
 	arts    map[int]*cinArt
 }
@@ -108,7 +107,7 @@ type cinHeroArt struct {
 	chunks   []cinChunkArt
 	centerX  float32
 	centerY  float32
-	clip     ui.Rect
+	clipH    float32
 	poster   []cinText
 	posterAt []float32
 }
@@ -135,18 +134,29 @@ type cinRibbonArt struct {
 
 type cinBandsArt struct {
 	marquee     *cinMarquee
-	top, bottom *cinText
+	top, bottom *cinBandLabel
 	ring        *cinRingArt
 }
 
-// cinRingArt 是四边一圈的字：整段重复文字的排版、一圈长度、每份宽，以及每个字的排版缓存。
+// 轨道宽和辉光排版一起缓存，渲染时只换颜色和位置。
+type cinBandLabel struct {
+	src, lang   string
+	font, track float32
+	width, h    float32
+	layout      *ui.TextLayout
+	accent      ui.Color
+}
+
+type cinRingGlyph struct {
+	label  *cinBandLabel
+	center float64
+}
+
+// 一个重复单元沿一圈铺开，路径和周长只算一次，构建与逐帧绘制共用。
 type cinRingArt struct {
-	source   string
-	glyphs   []ui.Glyph
-	unit     float32
-	orbit    int
-	font     ui.Font
-	perRune  map[rune]cinText
+	glyphs                         []cinRingGlyph
+	copies                         int
+	inset, w, h, radius, lap, unit float64
 }
 
 type cinPaint struct {
@@ -166,27 +176,22 @@ func stageSceneMarquee(c *ui.Context, s stageFrame) {
 	canvas := stageSceneCanvas(c.Key("cin-screen"))
 	cache := ui.Local(canvas, "cinerama", func() cinCache { return cinCache{} })
 	sig := cinSignature(s)
-	if cache.w != s.w || cache.h != s.h || cache.sig != sig {
-		*cache = cinCache{w: s.w, h: s.h, sig: sig, arts: map[int]*cinArt{}}
+	still := s.motion == 0
+	if cache.w != s.w || cache.h != s.h || cache.sig != sig || cache.still != still {
+		*cache = cinCache{w: s.w, h: s.h, sig: sig, still: still, arts: map[int]*cinArt{}}
 		cache.program = cinCompile(s.lines, s.trackKey, "", cinDefaultWeights, true)
 	}
 	geo := cinGeometryFor(s)
-	still := s.motion == 0
 	t := s.pos.Seconds()
 	between := still && s.current < 0
 	frame := cinEvaluate(cache.program, t, still, between)
-
-	canvas.Draw(func(p *ui.Painter, r ui.Rect) {
-		d := cinPaint{p: p, s: s, x: r.X, y: r.Y, geo: geo, accent: s.accent, still: still}
-		d.chrome()
-		if len(cache.program.plans) == 0 {
-			return
-		}
+	d := cinPaint{s: s, geo: geo, accent: s.accent, still: still}
+	canvas.Draw(func(p *ui.Painter, r ui.Rect) { d.on(p, r).chrome() }).Children(func() {
 		if frame.outgoing >= 0 {
-			d.drawPlan(cache, frame.outgoing, t, frame.out)
+			d.showPlan(c.Key("cin-outgoing"), cache, frame.outgoing, t, frame.out)
 		}
 		if frame.current >= 0 {
-			d.drawPlan(cache, frame.current, t, frame.now)
+			d.showPlan(c.Key("cin-current"), cache, frame.current, t, frame.now)
 		}
 	})
 
@@ -251,60 +256,41 @@ func (d cinPaint) vignette() {
 		return
 	}
 	stops := cinShadowStops(.16, blur, 0, float64(extent))
-	d.edgeGradient(ui.Rect{X: d.x, Y: d.y, W: w, H: extent}, stops, 180)
-	d.edgeGradient(ui.Rect{X: d.x, Y: d.y + h - extent, W: w, H: extent}, stops, 0)
-	d.edgeGradient(ui.Rect{X: d.x, Y: d.y, W: extent, H: h}, stops, 90)
-	d.edgeGradient(ui.Rect{X: d.x + w - extent, Y: d.y, W: extent, H: h}, stops, 270)
-}
-
-// ribbonFade 把丝带在四边擦淡：原版给丝带层加 DstIn 遮罩（边上透出宿主），MyGo 没有混合模式，
-// 改用底色盖一条“边上不透明、往里 8% 透明”的渐变来近似。
-func (d cinPaint) ribbonFade(reserve float32) {
-	w, h := d.geo.w, d.geo.h-reserve
-	by := min(24*d.geo.unit, h*.08)
-	bx := min(32*d.geo.unit, w*.06)
-	y := float32(min(.5, by/max(1, h)))
-	x := float32(min(.5, bx/max(1, w)))
-	base := d.base()
-	fade := func(r ui.Rect, angle float32, edge float32) {
-		d.p.FillGradient(r, ui.LinearGradient{Angle: angle, Stops: []ui.GradientStop{
-			{Color: base, At: 0}, {Color: base.Alpha(0), At: edge},
-		}}, 0)
-	}
-	fade(ui.Rect{X: d.x, Y: d.y, W: w, H: h}, 180, y)
-	fade(ui.Rect{X: d.x, Y: d.y, W: w, H: h}, 0, y)
-	fade(ui.Rect{X: d.x, Y: d.y, W: w, H: h}, 90, x)
-	fade(ui.Rect{X: d.x, Y: d.y, W: w, H: h}, 270, x)
-}
-
-// edgeGradient 从“近边”（At 0）往“远边”（At 1）衰减。近边靠角度挑：180 从上往下、0 从下往上、
-// 90 从左往右、270 从右往左。stops 必须按 At 升序，倒着排会让 MyGo 画成一块平色。
-func (d cinPaint) edgeGradient(r ui.Rect, stops []float32, angle float32) {
-	list := make([]ui.GradientStop, len(stops))
-	for i, a := range stops {
-		list[i] = ui.GradientStop{At: float32(cinGlowStops[i]), Color: white.Alpha(a)}
-	}
-	d.p.FillGradient(r, ui.LinearGradient{Angle: angle, Stops: list}, 0)
+	d.p.FillGradient(ui.Rect{X: d.x, Y: d.y, W: w, H: extent}, cinFalloff(white, stops, 180, 1), 0)
+	d.p.FillGradient(ui.Rect{X: d.x, Y: d.y + h - extent, W: w, H: extent}, cinFalloff(white, stops, 0, 1), 0)
+	d.p.FillGradient(ui.Rect{X: d.x, Y: d.y, W: extent, H: h}, cinFalloff(white, stops, 90, 1), 0)
+	d.p.FillGradient(ui.Rect{X: d.x + w - extent, Y: d.y, W: extent, H: h}, cinFalloff(white, stops, 270, 1), 0)
 }
 
 // ---------------------------------------------------------------- 一句
 
-func (d cinPaint) drawPlan(cache *cinCache, index int, t float64, env cinEnvelope) {
+func (d cinPaint) on(p *ui.Painter, r ui.Rect) cinPaint {
+	d.p, d.x, d.y = p, r.X, r.Y
+	return d
+}
+
+func (d cinPaint) showPlan(c *ui.Context, cache *cinCache, index int, t float64, env cinEnvelope) {
 	plan := &cache.program.plans[index]
 	art := d.artFor(cache, plan)
-	switch {
-	case art.hero != nil:
-		d.drawHero(art.hero, t, env)
-	case art.small != nil:
-		d.drawSmall(art.small, t, env)
-	case art.ribbon != nil:
-		d.drawRibbon(art.ribbon, plan, t, env)
-		d.ribbonFade(d.subtitleReserve(plan))
-		d.vignette()
-	}
-	if art.bands != nil && env.bands > .002 {
-		d.drawBands(art.bands, t, float32(env.bands))
-	}
+	stageSceneCanvas(c).Children(func() {
+		if env.opacity > .002 {
+			switch {
+			case art.hero != nil:
+				d.showHero(c.Key("hero"), art.hero, t, env)
+			case art.small != nil:
+				stageSceneCanvas(c.Key("small")).Draw(func(p *ui.Painter, r ui.Rect) {
+					d.on(p, r).drawSmall(art.small, t, env)
+				})
+			case art.ribbon != nil:
+				d.showRibbon(c.Key("ribbon"), art.ribbon, plan, t, env)
+			}
+		}
+		if art.bands != nil && env.bands > .002 {
+			stageSceneCanvas(c.Key("bands")).Draw(func(p *ui.Painter, r ui.Rect) {
+				d.on(p, r).drawBands(art.bands, t, float32(env.bands))
+			})
+		}
+	})
 }
 
 func (d cinPaint) artFor(cache *cinCache, plan *cinPlan) *cinArt {
@@ -495,9 +481,8 @@ func (d cinPaint) buildHero(plan *cinPlan, reserve float32) *cinHeroArt {
 	}
 	metrics := cinMetricsOf(float64(w), float64(h), float64(box.W), float64(box.H), side)
 	chunks := cinHeroChunks(plan, metrics)
-	clip := ui.Rect{X: d.x, Y: d.y, W: w, H: max(1, h-reserve)}
 	minFont := 28 * d.geo.unit
-	art := &cinHeroArt{centerX: box.X + box.W/2, centerY: box.Y + box.H/2, clip: clip}
+	art := &cinHeroArt{centerX: box.X + box.W/2, centerY: box.Y + box.H/2, clipH: max(1, h-reserve)}
 	for _, chunk := range chunks {
 		font := max(minFont, float32(chunk.font))
 		fontArg := ui.Font{Size: font, Weight: 600, Italic: chunk.italic, Lang: d.lang()}
@@ -589,6 +574,68 @@ func (art *cinHeroArt) buildPoster(box ui.Rect) {
 	}
 }
 
+func (d cinPaint) showHero(c *ui.Context, art *cinHeroArt, t float64, env cinEnvelope) {
+	layer := stageSceneCanvas(c).ClipInset(0, 0, d.geo.h-art.clipH, 0, 0)
+	layer.Draw(func(p *ui.Painter, r ui.Rect) { d.on(p, r).drawHero(art, t, env) }).Children(func() {
+		if art.poster != nil {
+			return
+		}
+		for i := range art.chunks {
+			chunk := &art.chunks[i]
+			if !chunk.chunk.fill {
+				continue
+			}
+			ok, look := cinChunkLook(chunk.chunk, t)
+			alpha := float32(look.opacity * env.opacity)
+			if !ok || alpha <= .002 {
+				continue
+			}
+			cx := art.centerX + float32(look.driftX)/100*d.geo.w
+			cy := art.centerY + float32(look.driftY)/100*d.geo.h
+			d.showFillChunk(c.Key(strconv.Itoa(i)), chunk, cx, cy, float32(look.scale*env.scale), alpha, float32(look.fill))
+		}
+	})
+}
+
+// 描边和填充用两份相同的原生排版，切口共用一个位置，细线不会叠在已经扫过的实心字上。
+func (d cinPaint) showFillChunk(c *ui.Context, chunk *cinChunkArt, cx, cy, scale, alpha, fill float32) {
+	text := &chunk.text
+	pad := text.h * .3
+	w, h := text.w+2*pad, text.h+2*pad
+	box := ui.Box(c).Absolute().Left(cx-w/2).Top(cy-h/2).Size(w, h).Scale(scale, scale).PassThrough()
+	box.Children(func() {
+		ink := d.accent.Alpha(alpha)
+		label := func(c *ui.Context, fill ui.Color) ui.Element {
+			e := ui.Text(c, text.src).Absolute().Left(pad).Top(pad).NoWrap().PreserveSpaces().
+				Font(text.font.Family).FontSize(text.font.Size).FontWeight(text.font.Weight).
+				Lang(text.font.Lang).TextColor(fill).Role(ui.RoleNone).PassThrough()
+			if text.font.Italic {
+				e.Italic()
+			}
+			return e
+		}
+		// 阴影先用透明字单独画，保证光晕跨过切口；预览沿用轻量绘制，不做大字模糊。
+		if !d.s.preview {
+			level := float32(math.Round(float64(alpha)*20)) / 20
+			label(c.Key("shadow"), ui.Transparent).TextShadow(0, 0, cinWordGlowBlur*d.geo.unit, d.accent.Alpha(level*cinWordGlowAlpha))
+		}
+		var solid, outline [4]float32
+		if chunk.chunk.fillVertical {
+			outline[0] = pad + text.h*fill
+			solid[2] = h - outline[0]
+		} else {
+			outline[3] = pad + text.w*fill
+			solid[1] = w - outline[3]
+		}
+		stageSceneCanvas(c.Key("outline")).ClipInset(outline[0], outline[1], outline[2], outline[3], 0).Children(func() {
+			label(c.Key("text"), ui.Transparent).TextStroke(max(1, cinOutlineEm*chunk.fontPx), ink)
+		})
+		stageSceneCanvas(c.Key("fill")).ClipInset(solid[0], solid[1], solid[2], solid[3], 0).Children(func() {
+			label(c.Key("text"), ink)
+		})
+	})
+}
+
 func (d cinPaint) drawHero(art *cinHeroArt, t float64, env cinEnvelope) {
 	if len(art.chunks) == 0 {
 		return
@@ -603,29 +650,27 @@ func (d cinPaint) drawHero(art *cinHeroArt, t float64, env cinEnvelope) {
 		return
 	}
 	scale := float32(env.scale)
-	d.p.Clip(art.clip, 0, func() {
-		for i := range art.chunks {
-			c := &art.chunks[i]
-			ok, look := cinChunkLook(c.chunk, t)
-			if !ok {
-				continue
-			}
-			cx := art.centerX + float32(look.driftX)/100*d.geo.w
-			cy := art.centerY + float32(look.driftY)/100*d.geo.h
-			alpha := float32(look.opacity) * opacity
-			if alpha <= .002 {
-				continue
-			}
-			ink := d.accent.Alpha(alpha)
-			s := float32(look.scale) * scale
-			d.p.Transform(ui.Scaling(s, s), d.x+cx, d.y+cy, func() {
-				d.drawChunk(c, cx, cy, float32(look.trackEm), alpha, ink, float32(look.fill))
-			})
+	for i := range art.chunks {
+		c := &art.chunks[i]
+		if c.chunk.fill {
+			continue // 交给原生 TextStroke，保留空心和真实抗锯齿。
 		}
-	})
+		ok, look := cinChunkLook(c.chunk, t)
+		alpha := float32(look.opacity) * opacity
+		if !ok || alpha <= .002 {
+			continue
+		}
+		cx := art.centerX + float32(look.driftX)/100*d.geo.w
+		cy := art.centerY + float32(look.driftY)/100*d.geo.h
+		ink := d.accent.Alpha(alpha)
+		s := float32(look.scale) * scale
+		d.p.Transform(ui.Scaling(s, s), d.x+cx, d.y+cy, func() {
+			d.drawChunk(c, cx, cy, float32(look.trackEm), alpha, ink)
+		})
+	}
 }
 
-func (d cinPaint) drawChunk(c *cinChunkArt, cx, cy, trackEm, alpha float32, ink ui.Color, fill float32) {
+func (d cinPaint) drawChunk(c *cinChunkArt, cx, cy, trackEm, alpha float32, ink ui.Color) {
 	if len(c.glyphs) > 0 {
 		track := trackEm * c.fontPx
 		left := cx - (c.glyphW+track*float32(len(c.glyphs)-1))/2
@@ -638,25 +683,7 @@ func (d cinPaint) drawChunk(c *cinChunkArt, cx, cy, trackEm, alpha float32, ink 
 	text := &c.text
 	track := trackEm * c.fontPx
 	left := cx - text.trackWidth(track)/2
-	if !c.chunk.fill {
-		d.glowText(text, left, cy, alpha, ink)
-		return
-	}
-	// 描边填色：没扫到的一侧画成三成透明的实心字（细描边的近似），扫到的一侧画实心字。
-	d.glowText(text, left, cy, alpha*.32, ink.Alpha(alpha*.32))
-	pad := text.h * .3
-	top := cy - text.h/2
-	if c.chunk.fillVertical {
-		split := top + text.h*fill
-		d.p.Clip(ui.Rect{X: d.x + left - pad, Y: d.y + top - pad, W: text.w + 2*pad, H: max(0, split-top+pad)}, 0, func() {
-			d.glowText(text, left, cy, alpha, ink)
-		})
-		return
-	}
-	split := left + text.w*fill
-	d.p.Clip(ui.Rect{X: d.x + left - pad, Y: d.y + top - pad, W: max(0, split-left+pad), H: text.h + 2*pad}, 0, func() {
-		d.glowText(text, left, cy, alpha, ink)
-	})
+	d.glowText(text, left, cy, alpha, ink)
 }
 
 // ---------------------------------------------------------------- 斜切丝带
@@ -687,9 +714,14 @@ func (d cinPaint) buildRibbon(plan *cinPlan, reserve float32) *cinRibbonArt {
 		length := float32(cinRibbonLength(float64(area.W), float64(area.H), strip, clampPx))
 		font := min(thickness, max(float32(10*u), float32(strip.fontPct()*float64(area.H)/100)))
 		text := cinShape(strip.text+"　", ui.Font{Size: font, Weight: 800, Lang: d.lang()})
+		track := cinRibbonTrackEm * font
+		textUnit := max(1, text.trackWidth(track))
+		for i := range text.glyphs {
+			text.glyphs[i].X += track * float32(i)
+		}
 		art.strips = append(art.strips, cinStripArt{
 			strip: strip, cx: area.X + area.W/2, cy: cy, length: length, thickness: thickness,
-			text: text, textUnit: max(1, text.trackWidth(cinRibbonTrackEm*text.h)),
+			text: text, textUnit: textUnit,
 			shade:          cinShadeGradient(strip),
 			glowExtent:     glowExtent,
 			dropExtent:     dropExtent,
@@ -717,100 +749,155 @@ func cinShadeGradient(strip cinStrip) ui.LinearGradient {
 	return ui.LinearGradient{Angle: float32(strip.shadeAngle), Stops: out}
 }
 
-func (d cinPaint) drawRibbon(art *cinRibbonArt, plan *cinPlan, t float64, env cinEnvelope) {
+func (d cinPaint) showRibbon(c *ui.Context, art *cinRibbonArt, plan *cinPlan, t float64, env cinEnvelope) {
+	area := art.area
+	// 先把重叠的带身、投影和文字合成，再将横纵两张渐变遮罩相乘；边缘透出原来的屏面。
+	// 用 MyGo 的原生遮罩缓存，软件渲染也不必逐帧跑全屏 shader。
+	fade := func(angle, edge float32) ui.LinearGradient {
+		return ui.LinearGradient{Angle: angle, Stops: []ui.GradientStop{
+			{Color: ui.Transparent, At: 0}, {Color: white, At: edge},
+			{Color: white, At: 1 - edge}, {Color: ui.Transparent, At: 1},
+		}}
+	}
+	x := min(32/area.W, .06)
+	y := min(24/area.H, .08)
+	scale := float32(env.scale)
+	ui.Box(c).Absolute().Top(0).Left(0).Size(area.W, area.H).PassThrough().Clip().Cache().
+		Scale(scale, scale).TransformOrigin(.5, d.geo.h/2/area.H).Opacity(float32(env.opacity)).Masks(
+		ui.Mask{Image: fade(90, x), Composite: ui.MaskIntersect},
+		ui.Mask{Image: fade(180, y)},
+	).Draw(func(p *ui.Painter, r ui.Rect) {
+		d.on(p, r).drawRibbon(art, plan, t)
+	})
+}
+
+func (d cinPaint) drawRibbon(art *cinRibbonArt, plan *cinPlan, t float64) {
 	elapsed := t - plan.start
 	if d.still {
 		elapsed = 0
 	}
 	w := float64(art.area.W)
 	h := float64(art.area.H)
-	scroll := float32(cinRibbonScroll(elapsed, w, art.spanSec))
-	ink := d.base() // 带身是强调色，字用屏面底色
-	opacity := float32(env.opacity)
-	d.p.Clip(ui.Rect{X: d.x, Y: d.y, W: art.area.W, H: art.area.H}, 0, func() {
-		for i := range art.strips {
-			s := &art.strips[i]
-			drift := float32(cinRibbonDrift(s.strip, elapsed, h, art.clampPx))
-			half := s.thickness / 2
-			l := s.length / 2
-			cx, cy := d.x+s.cx, d.y+s.cy+drift
-			d.p.Transform(ui.Rotation(float32(s.strip.angle)), cx, cy, func() {
-				// 带下沿一条 1dp 的白线，让丝带有厚度感（原版 lineH = unit）。
-				d.p.Fill(ui.Rect{X: cx - l, Y: cy + half, W: s.length, H: d.geo.unit}, white.Alpha(.3*opacity), 0)
-				// 外发光与投影：从带边往外按高斯尾巴衰减。
-				d.stripGlow(ui.Rect{X: cx - l, Y: cy - half - s.dropExtent, W: s.length, H: s.dropExtent}, s.dropAboveStops, true, opacity, true)
-				d.stripGlow(ui.Rect{X: cx - l, Y: cy + half, W: s.length, H: s.dropExtent}, s.dropBelowStops, false, opacity, true)
-				d.stripGlow(ui.Rect{X: cx - l, Y: cy - half - s.glowExtent, W: s.length, H: s.glowExtent}, s.glowStops, true, opacity, false)
-				d.stripGlow(ui.Rect{X: cx - l, Y: cy + half, W: s.length, H: s.glowExtent}, s.glowStops, false, opacity, false)
-				d.p.Fill(ui.Rect{X: cx - l, Y: cy - half, W: s.length, H: s.thickness}, d.accent.Alpha(opacity), 0)
-				d.p.FillGradient(ui.Rect{X: cx - l, Y: cy - half, W: s.length, H: s.thickness}, s.shade, 0)
-				d.p.Clip(ui.Rect{X: cx - l, Y: cy - half, W: s.length, H: s.thickness}, 0, func() {
-					unit := s.textUnit
-					x := cx - l - scroll
-					for x < cx+l {
-						d.text(s.text, x, cy, cinRibbonTrackEm*s.text.h, ink.Alpha(opacity))
-						x += unit
-					}
-				})
+	scroll := cinRibbonScroll(elapsed, w, art.spanSec)
+	ink := d.base() // 带身是强调色，字用屏面底色。
+	for i := range art.strips {
+		s := &art.strips[i]
+		drift := float32(cinRibbonDrift(s.strip, elapsed, h, art.clampPx))
+		half := s.thickness / 2
+		l := s.length / 2
+		cx, cy := d.x+s.cx, d.y+s.cy+drift
+		d.p.Transform(ui.Rotation(float32(s.strip.angle)), cx, cy, func() {
+			// 带下沿的一条白线让丝带有厚度；上下边用高斯尾部模拟投影和外发光。
+			d.p.Fill(ui.Rect{X: cx - l, Y: cy + half, W: s.length, H: max(1, d.geo.unit)}, white.Alpha(.3), 0)
+			d.p.FillGradient(ui.Rect{X: cx - l, Y: cy - half - s.dropExtent, W: s.length, H: s.dropExtent}, cinFalloff(black, s.dropAboveStops, 0, 1), 0)
+			d.p.FillGradient(ui.Rect{X: cx - l, Y: cy + half, W: s.length, H: s.dropExtent}, cinFalloff(black, s.dropBelowStops, 180, 1), 0)
+			d.p.FillGradient(ui.Rect{X: cx - l, Y: cy - half - s.glowExtent, W: s.length, H: s.glowExtent}, cinFalloff(d.accent, s.glowStops, 0, 1), 0)
+			d.p.FillGradient(ui.Rect{X: cx - l, Y: cy + half, W: s.length, H: s.glowExtent}, cinFalloff(d.accent, s.glowStops, 180, 1), 0)
+			band := ui.Rect{X: cx - l, Y: cy - half, W: s.length, H: s.thickness}
+			d.p.Fill(band, d.accent, 0)
+			d.p.FillGradient(band, s.shade, 0)
+			d.p.Clip(band, 0, func() {
+				// 只从带首前至多一份处开始铺字，不画已滚出左端的重复字；原版字无阴影。
+				x := cx - l - float32(math.Mod(scroll, float64(s.textUnit)))
+				for ; x < cx+l; x += s.textUnit {
+					d.text(s.text, x, cy, 0, ink)
+				}
 			})
-		}
-	})
+		})
+	}
 }
 
-// stripGlow 画带子一侧或屏面一侧的衰减渐变；above 为真时带边在矩形下沿。
-func (d cinPaint) stripGlow(r ui.Rect, alphas []float32, above bool, alpha float32, dark bool) {
-	ink := d.accent
-	if dark {
-		ink = ui.RGB(0, 0, 0)
-	}
+// cinFalloff 的 At 0 贴近边线；180° 从上向下，0° 从下向上，水平方向同理。
+func cinFalloff(ink ui.Color, alphas []float32, angle, alpha float32) ui.LinearGradient {
 	list := make([]ui.GradientStop, len(alphas))
 	for i, a := range alphas {
-		list[i] = ui.GradientStop{At: float32(cinGlowStops[i]), Color: ink.Alpha(a * alpha)}
+		list[i] = ui.GradientStop{At: cinGlowStops[i], Color: ink.Alpha(a * alpha)}
 	}
-	// above 时近边（At 0）在矩形下沿，所以渐变线从下往上。
-	angle := float32(180)
-	if above {
-		angle = 0
-	}
-	d.p.FillGradient(r, ui.LinearGradient{Angle: angle, Stops: list}, 0)
+	return ui.LinearGradient{Angle: angle, Stops: list}
 }
 
 // ---------------------------------------------------------------- 跑马灯带
 
 func (d cinPaint) buildBands(m *cinMarquee) *cinBandsArt {
-	bandFont := max(12*d.geo.unit, d.geo.band*cinBandFontRatio)
+	font := max(12*d.geo.unit, d.geo.band*cinBandFontRatio)
 	art := &cinBandsArt{marquee: m}
 	if m.kind == cinBands {
 		if m.top != "" {
-			t := cinShape(m.top+"　", ui.Font{Size: bandFont, Weight: 600, Lang: d.lang()})
-			art.top = &t
+			art.top = d.bandLabel(m.top+"　", font, cinBandTrack*font)
 		}
 		if m.bottom != "" {
-			t := cinShape(m.bottom+"　", ui.Font{Size: bandFont, Weight: 600, Lang: d.lang()})
-			art.bottom = &t
+			art.bottom = d.bandLabel(m.bottom+"　", font, cinBandTrack*font)
 		}
-		return art
-	}
-	if m.ring == "" {
-		return art
-	}
-	font := ui.Font{Size: bandFont, Weight: 600, Lang: d.lang()}
-	one := m.ring + "　"
-	oneText := cinShape(one, font)
-	period := oneText.trackWidth(cinBandTrack * bandFont)
-	radius := float64(min(d.geo.w, d.geo.h) * .06)
-	lap := cinRingLap(float64(d.geo.w-2*d.geo.band), float64(d.geo.h-2*d.geo.band), radius)
-	copies, _ := cinRingCopies(lap, float64(period), len([]rune(one)))
-	source := strings.Repeat(one, copies)
-	glyphs := ui.Shape(source, font)
-	for i := range glyphs {
-		glyphs[i].X += cinBandTrack * bandFont * float32(i)
-	}
-	art.ring = &cinRingArt{
-		source: source, glyphs: glyphs, unit: float32(period), orbit: m.orbit,
-		font: font, perRune: map[rune]cinText{},
+	} else if m.ring != "" {
+		art.ring = d.buildRing(m.ring+"　", font)
 	}
 	return art
+}
+
+func (d cinPaint) bandLabel(src string, font, track float32) *cinBandLabel {
+	label := &cinBandLabel{src: src, lang: d.lang(), font: font, track: track}
+	label.shape(d.accent.Alpha(cinBandGlowAlpha))
+	return label
+}
+
+func (b *cinBandLabel) shape(shadow ui.Color) {
+	b.accent = shadow
+	b.layout = ui.ShapeRichText([]ui.Span{{Text: b.src, LetterSpacing: b.track,
+		Shadow: ui.NewTextShadow(0, 0, b.font*cinBandGlowBlur, shadow)}},
+		ui.Font{Size: b.font, Weight: 600, Lang: b.lang}, 0)
+	b.width, b.h = b.layout.Size()
+}
+
+func (d cinPaint) drawBandLabel(b *cinBandLabel, x, cy float32, ink, shadow ui.Color) {
+	if b.accent != shadow {
+		b.shape(shadow)
+	}
+	d.p.TextLayout(b.layout, d.x+x, d.y+cy-b.h/2, ink)
+}
+
+func (d cinPaint) buildRing(one string, font float32) *cinRingArt {
+	g := d.geo
+	inset := float64(g.band) / 2
+	w, h := float64(g.w)-2*inset, float64(g.h)-2*inset
+	radius := min(float64(g.band)*.4, max(0, min(w, h)/2-1))
+	lap := cinRingLap(w, h, radius)
+	track := float64(cinBandTrack * font)
+	text := cinShape(one, ui.Font{Size: font, Weight: 600, Lang: d.lang()})
+	if len(text.glyphs) == 0 {
+		return nil
+	}
+	count := len([]rune(one))
+	period := float64(text.w) + track*float64(count)
+	copies, extra := cinRingCopies(lap, period, count)
+	track += extra
+	ring := &cinRingArt{inset: inset, w: w, h: h, radius: radius, lap: lap, unit: lap / float64(copies), copies: copies}
+	labels := map[string]*cinBandLabel{}
+	src := []rune(one)
+	// 只排一份。合字和组合符号按塑形得到的簇一次画，避免绕环时变成多个重复的字。
+	for i, steps := 0, 0; i < len(text.glyphs); {
+		first := text.glyphs[i]
+		j := i + 1
+		for j < len(text.glyphs) && text.glyphs[j].Cluster == first.Cluster {
+			j++
+		}
+		end := min(first.Cluster+max(1, first.Runes), count)
+		if first.Cluster >= 0 && first.Cluster < end {
+			cluster := string(src[first.Cluster:end])
+			if strings.TrimSpace(cluster) != "" {
+				label := labels[cluster]
+				if label == nil {
+					label = d.bandLabel(cluster, font, 0)
+					labels[cluster] = label
+				}
+				last := text.glyphs[j-1]
+				center := float64(first.X+last.X+last.Advance)/2 + track*float64(steps)
+				ring.glyphs = append(ring.glyphs, cinRingGlyph{label: label, center: center})
+			}
+			steps += end - first.Cluster
+		}
+		i = j
+	}
+	return ring
 }
 
 func (d cinPaint) drawBands(art *cinBandsArt, t float64, alpha float32) {
@@ -819,41 +906,47 @@ func (d cinPaint) drawBands(art *cinBandsArt, t float64, alpha float32) {
 	band := d.geo.band
 	if m.kind == cinFrame {
 		if art.ring != nil {
-			d.drawRing(art.ring, t, alpha)
 			d.ringEdges(alpha)
+			d.drawRing(art.ring, m, t, alpha)
 		}
 		return
 	}
 	unit := float64(0)
 	if art.top != nil {
-		unit = float64(art.top.trackWidth(cinBandTrack * art.top.h))
+		unit = float64(art.top.width)
 	}
-	shift := 0.0
-	if !d.still {
-		shift = cinBandShift(t, m.screensPerSec, 1, float64(w), unit)
-	}
+	shift := d.bandShift(m, t, unit)
 	if art.top != nil {
-		d.bandText(*art.top, ui.Rect{X: 0, Y: 0, W: w, H: band}, cinBandSlot(shift, m.orbit, false, m.mirror), false, alpha)
+		d.bandText(art.top, ui.Rect{X: 0, Y: 0, W: w, H: band}, cinBandSlot(shift, m.orbit, false, m.mirror), false, alpha)
 	}
 	if art.bottom != nil {
-		d.bandText(*art.bottom, ui.Rect{X: 0, Y: h - band, W: w, H: band}, cinBandSlot(shift, m.orbit, true, m.mirror), m.mirror, alpha)
+		d.bandText(art.bottom, ui.Rect{X: 0, Y: h - band, W: w, H: band}, cinBandSlot(shift, m.orbit, true, m.mirror), m.mirror, alpha)
 	}
 	d.bandEdges(alpha)
 }
 
+func (d cinPaint) bandShift(m *cinMarquee, t, unit float64) float64 {
+	if d.still {
+		return 0
+	}
+	// 桌面没有单独的跑马灯速度设置，沿用原版默认倍率 1。
+	return cinBandShift(t, m.screensPerSec, 1, float64(d.geo.w), unit)
+}
+
 // bandText 把“字　”一份接一份铺满整条，按 slot（以份为单位）平移；镜像的下带整条转 180°。
-func (d cinPaint) bandText(t cinText, rect ui.Rect, slot float64, flipped bool, alpha float32) {
-	unit := t.trackWidth(cinBandTrack * t.h)
+func (d cinPaint) bandText(t *cinBandLabel, rect ui.Rect, slot float64, flipped bool, alpha float32) {
+	unit := t.width
 	if unit <= 1 {
 		return
 	}
 	cy := rect.Y + rect.H/2
 	ink := d.accent.Alpha(alpha)
+	shadow := d.accent.Alpha(cinBandGlowAlpha * alpha)
 	d.p.Clip(ui.Rect{X: d.x + rect.X, Y: d.y + rect.Y, W: rect.W, H: rect.H}, 0, func() {
 		draw := func() {
 			x := rect.X + float32(cinFrac(slot))*unit - unit
-			for x < rect.W {
-				d.text(t, x, cy, cinBandTrack*t.h, ink)
+			for x < rect.X+rect.W {
+				d.drawBandLabel(t, x, cy, ink, shadow)
 				x += unit
 			}
 		}
@@ -881,87 +974,65 @@ func (d cinPaint) bandEdges(alpha float32) {
 	d.edgeGlow(ui.Rect{X: d.x, Y: d.y + bottom - e, W: w, H: e}, glow.screen, 0, alpha)
 }
 
-// edgeGlow 是一条带边辉光：alphas 按 cinGlowStops 取样，近边（At 0）由角度决定。
+// edgeGlow 是一条带边辉光：近边（At 0）由角度决定。
 func (d cinPaint) edgeGlow(r ui.Rect, alphas []float32, angle, alpha float32) {
-	list := make([]ui.GradientStop, len(alphas))
-	for i, a := range alphas {
-		list[i] = ui.GradientStop{At: float32(cinGlowStops[i]), Color: d.accent.Alpha(a * alpha)}
-	}
-	d.p.FillGradient(r, ui.LinearGradient{Angle: angle, Stops: list}, 0)
+	d.p.FillGradient(r, cinFalloff(d.accent, alphas, angle, alpha), 0)
 }
 
-// ringEdges 是四边带的边线辉光。原版用梯形把四个角按对角线分开，这里用矩形近似，角上会略微叠亮一点。
+// 内外两圈梯形共用斜切角，邻边只在对角线上相接，不叠出亮块。
 func (d cinPaint) ringEdges(alpha float32) {
 	glow := cinEdgeGlowOf(float64(d.geo.band))
 	e := glow.extent
-	if e <= .5 {
+	b := d.geo.band
+	l, tp, r, btm := d.x+b, d.y+b, d.x+d.geo.w-b, d.y+d.geo.h-b
+	if e <= .5 || r-l < 2*e || btm-tp < 2*e {
 		return
 	}
-	w, h, b := d.geo.w, d.geo.h, d.geo.band
-	l, tp, r, btm := b, b, w-b, h-b
-	if r-l < 2*e || btm-tp < 2*e {
-		return
+	quad := func(g ui.LinearGradient, x0, y0, x1, y1, x2, y2, x3, y3 float32) {
+		var path ui.Path
+		path.MoveTo(x0, y0).LineTo(x1, y1).LineTo(x2, y2).LineTo(x3, y3).Close()
+		d.p.FillPathGradient(&path, g)
 	}
-	// 往屏心
-	d.edgeGlow(ui.Rect{X: d.x + l, Y: d.y + tp, W: r - l, H: e}, glow.screen, 180, alpha)
-	d.edgeGlow(ui.Rect{X: d.x + l, Y: d.y + btm - e, W: r - l, H: e}, glow.screen, 0, alpha)
-	d.edgeGlow(ui.Rect{X: d.x + l, Y: d.y + tp, W: e, H: btm - tp}, glow.screen, 90, alpha)
-	d.edgeGlow(ui.Rect{X: d.x + r - e, Y: d.y + tp, W: e, H: btm - tp}, glow.screen, 270, alpha)
-	// 往带子
-	d.edgeGlow(ui.Rect{X: d.x + l - e, Y: d.y + tp - e, W: r - l + 2*e, H: e}, glow.band, 0, alpha)
-	d.edgeGlow(ui.Rect{X: d.x + l - e, Y: d.y + btm, W: r - l + 2*e, H: e}, glow.band, 180, alpha)
-	d.edgeGlow(ui.Rect{X: d.x + l - e, Y: d.y + tp, W: e, H: btm - tp}, glow.band, 270, alpha)
-	d.edgeGlow(ui.Rect{X: d.x + r, Y: d.y + tp, W: e, H: btm - tp}, glow.band, 90, alpha)
+	for _, inside := range []bool{true, false} {
+		dx, alphas := e, glow.screen
+		if !inside {
+			dx, alphas = -e, glow.band
+		}
+		gradient := func(angle float32) ui.LinearGradient {
+			if !inside {
+				angle += 180
+			}
+			return cinFalloff(d.accent, alphas, angle, alpha)
+		}
+		quad(gradient(180), l, tp, r, tp, r-dx, tp+dx, l+dx, tp+dx)
+		quad(gradient(0), l, btm, r, btm, r-dx, btm-dx, l+dx, btm-dx)
+		quad(gradient(90), l, tp, l, btm, l+dx, btm-dx, l+dx, tp+dx)
+		quad(gradient(270), r, tp, r, btm, r-dx, btm-dx, r-dx, tp+dx)
+	}
 }
 
-// drawRing 把一段重复文字逐字摆在圆角矩形上，每个字按切线旋转。
-func (d cinPaint) drawRing(ring *cinRingArt, t float64, alpha float32) {
-	// 文字路径走在带厚的中线上（原版 inset 半个带厚）。
-	g := d.geo
-	inset := g.band / 2
-	l, tp := inset, inset
-	r, b := g.w-inset, g.h-inset
-	radius := min(g.band*.4, max(0, min(r-l, b-tp)/2-1))
-	lap := cinRingLap(float64(r-l), float64(b-tp), float64(radius))
-	if lap <= 0 || ring.unit <= 1 {
+// drawRing 把重复单元逐字摆在圆角矩形上；按周长取模，不需要像 Android 一样把路径连成两圈。
+func (d cinPaint) drawRing(ring *cinRingArt, m *cinMarquee, t float64, alpha float32) {
+	if ring.lap <= 0 || ring.unit <= 1 {
 		return
 	}
-	shift := 0.0
-	if !d.still {
-		shift = cinBandShift(t, m0Speed, 1, float64(g.w), float64(ring.unit))
-	}
-	offset := float64(cinRingOffset(shift, ring.orbit, float64(ring.unit)))
+	offset := cinRingOffset(d.bandShift(m, t, ring.unit), m.orbit, ring.unit)
 	ink := d.accent.Alpha(alpha)
-	src := []rune(ring.source)
-	for _, glyph := range ring.glyphs {
-		dist := cinFrac((offset + float64(glyph.X+glyph.Advance/2)) / lap)
-		px, py, angle := cinRingPoint(float64(l+radius), float64(tp+radius), float64(r-l), float64(b-tp), float64(radius), dist*lap)
-		ch := ' '
-		if glyph.Cluster >= 0 && glyph.Cluster < len(src) {
-			ch = src[glyph.Cluster]
+	shadow := d.accent.Alpha(cinBandGlowAlpha * alpha)
+	for i := 0; i < ring.copies; i++ {
+		start := offset + float64(i)*ring.unit
+		for _, glyph := range ring.glyphs {
+			x, y, angle := cinRingPoint(ring.inset+ring.radius, ring.inset+ring.radius, ring.w, ring.h, ring.radius, start+glyph.center)
+			px, py := float32(x), float32(y)
+			d.p.Transform(ui.Rotation(float32(angle)), d.x+px, d.y+py, func() {
+				d.drawBandLabel(glyph.label, px-glyph.label.width/2, py, ink, shadow)
+			})
 		}
-		gt, ok := ring.perRune[ch]
-		if !ok {
-			gt = cinShape(string(ch), ring.font)
-			ring.perRune[ch] = gt
-		}
-		if gt.w <= 0 {
-			continue
-		}
-		d.p.Transform(ui.Rotation(float32(angle)), d.x+float32(px), d.y+float32(py), func() {
-			d.text(gt, float32(px)-gt.w/2, float32(py), 0, ink)
-		})
 	}
 }
-
-// m0Speed 是四边环的基准带速。
-const m0Speed = .12
 
 // cinRingPoint 在圆角矩形上按周长距离取点与切线角度（度，顺时针；0 是向右）。
 func cinRingPoint(cx, cy, w, h, r, dist float64) (x, y, angle float64) {
-	if r <= 0 {
-		r = .001
-	}
 	arc := math.Pi * r / 2
 	topLen := max(0, w-2*r)
 	sideLen := max(0, h-2*r)
@@ -974,7 +1045,11 @@ func cinRingPoint(cx, cy, w, h, r, dist float64) (x, y, angle float64) {
 	if total <= 0 {
 		return cx, cy, 0
 	}
-	d := math.Mod(math.Mod(dist, total)+total, total)
+	dist = math.Mod(dist, total)
+	if dist < 0 {
+		dist += total
+	}
+	d := dist
 	seg := 0
 	for seg < 7 && d > lengths[seg] {
 		d -= lengths[seg]
@@ -1026,19 +1101,17 @@ func (d cinPaint) text(t cinText, left, cy, track float32, ink ui.Color) {
 	d.p.Glyphs(glyphs, d.x+left, d.y+cy+(t.ascent-t.descent)/2, ink)
 }
 
-// glowText 画同色辉光 + 实心字。原版是 CSS text-shadow 0 0 30px；MyGo 的文字阴影
-// 是真模糊，正好对上——阴影用同色、模糊 30（按屏折算），铺在字下，实心字按 ink 的
-// 透明度盖上去。旧写法把整字往外错位叠 16 遍，放大后是一圈硬锯齿，像描边。
+// glowText 画实心字和较宽的同色柔光。阴影按档缓存，字身仍按播放进度连续淡入淡出。
 func (d cinPaint) glowText(t *cinText, left, cy, alpha float32, ink ui.Color) {
-	if t == nil || len(t.glyphs) == 0 || ink.A == 0 || alpha <= .01 || d.s.preview {
+	if t == nil || len(t.glyphs) == 0 || ink.A == 0 || alpha <= .01 {
 		return
 	}
-	// 原版把阴影浓度量化成档缓存；这里同样按档缓存排版，免得逐帧重新塑形。
 	level := int(math.Round(float64(cinClamp(float64(alpha), 0, 1)) * cinGlowLevels))
-	if level <= 0 {
+	if d.s.preview || level <= 0 {
+		d.text(*t, left, cy, 0, ink)
 		return
 	}
-	layout := t.glowLayout(float32(cinGlowRatio)*d.geo.unit, level, d.accent)
+	layout := t.glowLayout(cinWordGlowBlur*d.geo.unit, level, d.accent.Alpha(cinWordGlowAlpha))
 	_, h := layout.Size()
 	d.p.TextLayout(layout, d.x+left, d.y+cy-h/2, ink)
 }

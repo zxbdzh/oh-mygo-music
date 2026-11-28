@@ -223,22 +223,23 @@ func (d colorStagePaint) rippleWatermark(l *colorStageLayout, pal wavePalette, e
 	runes := []rune(word)
 	size := max(28, min(h*.42, w*.8/float32(max(1, len(runes))))) * .8
 	font := ui.Font{Size: size, Weight: 800}
-	// 宽度给足舞台：给 0 时排版的 Size 就是 0，取不到水印的真实宽高。
-	shape := ui.ShapeText(word, font, w)
+	// 没有整层柔焦时走安卓低版本的透明度：填充和阴影一起乘入场进度。
+	p := rippleEase(clamp01(elapsed / waveKeywordIn))
+	fade := .92 * .55 * p
+	// MyGo 的文字模糊参数是 2σ，直接用安卓换算前的值即可。
+	shadow := ui.NewTextShadow(0, 0, max(8, h*.02), pal.keyword.Alpha(.3*fade))
+	span := ui.Span{Text: word, Shadow: shadow}
+	shape := ui.ShapeRichText([]ui.Span{span}, font, w)
 	sw, sh := shape.Size()
 	if sw > w*.96 {
-		size *= w * .96 / sw
-		font.Size = size
-		shape = ui.ShapeText(word, font, w)
+		font.Size *= w * .96 / sw
+		shape = ui.ShapeRichText([]ui.Span{span}, font, w)
 		sw, sh = shape.Size()
 	}
-	p := rippleEase(clamp01(elapsed / waveKeywordIn))
 	scale := 1.06 - .06*p
 	x, y := d.x+w/2, d.y+h*.5
-	// 没有模糊时原模组也会把水印压到 55%，免得一个清楚的大字抢正文。
-	ink := pal.keyword.Alpha(.55 * p)
 	d.p.Transform(ui.Scaling(scale, scale), x, y, func() {
-		d.p.TextLayout(shape, x-sw/2, y-sh/2, ink)
+		d.p.TextLayout(shape, x-sw/2, y-sh/2, pal.keyword.Alpha(.88*fade))
 	})
 }
 
@@ -267,7 +268,7 @@ func (d colorStagePaint) rippleTokens(l *colorStageLayout, pal wavePalette, elap
 		}
 		level := int(math.Round(float64(clamp01(.5*p)) * cinGlowLevels))
 		if level > 0 && len(g.glyphs) > 0 {
-			layout := glowLayoutFor(g.text, l.textFont, &g.glow, blur, level, pal.keyword)
+			layout := glowLayoutAtFor(g.text, l.textFont, &g.glow, 0, 1, blur, level, pal.keyword)
 			d.p.TextLayout(layout, d.x+g.x+dx+g.glyphs[0].X, d.y+g.y-asc, pal.tint.Alpha(.97*p))
 			continue
 		}
@@ -284,14 +285,15 @@ func (d colorStagePaint) rippleSubtitle(l *colorStageLayout, pal wavePalette, el
 	w, h := d.s.w, d.s.h
 	size := max(11, l.font*.4)
 	font := ui.Font{Size: size, Weight: 400, LineHeight: 1.5}
-	shape := ui.ShapeText(text, font, w*.7)
-	_, sh := shape.Size()
+	// 黑色投影和副行一起淡入，弱对比时仍能从游动的波光里读出字幕。
+	p := rippleEase(clamp01(elapsed / waveSubtitleIn))
+	shadow := ui.NewTextShadow(0, 1, 8, ui.RGBA(0, 0, 0, .35*p))
+	shape := ui.ShapeRichText([]ui.Span{{Text: text, Shadow: shadow}}, font, w*.7)
+	sw, sh := shape.Size()
 	// 水印下沿再往下四分之一个字高，不压正文、不出舞台。
 	centerY := h*.75 + l.font/4
 	centerY = max(centerY, h*.5+l.font*1.1+sh/2)
 	centerY = min(centerY, h-sh/2-4)
-	p := rippleEase(clamp01(elapsed / waveSubtitleIn))
-	_, sw := shape.Size()
 	d.p.TextLayout(shape, d.x+w/2-sw/2, d.y+centerY-sh/2, pal.tint.Alpha(.68*p))
 }
 
