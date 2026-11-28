@@ -54,15 +54,7 @@ func (w *watched) SetPosition(frame int64) error {
 	w.positioning.Store(true)
 	defer w.positioning.Store(false)
 	defer w.begin()()
-	_, spec := w.stream.source()
-	var generation uint64
-	if spec != nil {
-		generation = spec.tempo.positionGeneration()
-	}
 	err := w.stream.SetPosition(frame)
-	if err == nil && spec != nil {
-		spec.tempo.positioned(generation)
-	}
 	if err != nil {
 		// 音频层会把定位失败变成无原因结束，必须在这里保留原始错误。
 		w.failureMu.Lock()

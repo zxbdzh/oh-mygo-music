@@ -673,7 +673,6 @@ const (
 )
 
 type spectrum struct {
-	tempo  tempoState
 	mu     sync.RWMutex
 	rate   int
 	ring   []measured // chunk c in ring[c%len(ring)], if it's still there
@@ -718,7 +717,6 @@ func (s *spectrum) feed(at int64, stereo []float32) {
 	if s == nil {
 		return
 	}
-	s.tempo.feed(at, stereo, s.rate)
 	if s.accAt < 0 || at != s.accAt+int64(len(s.acc)) {
 		// The start, or a seek: begin a chunk at a chunk's boundary.
 		s.acc = s.acc[:0]

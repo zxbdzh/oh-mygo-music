@@ -100,21 +100,11 @@ func pressThenSettle(t *testing.T, tester *ui.Tester, label string) {
 	settled(tester)
 	tester.Press(box.X+box.W/2, box.Y+box.H/2)
 	tester.Frame()
-	// 样式入口改为点击后打开面板，译文仍在按下时打开菜单。
-	if label == "Stage Style" {
-		tester.Release(box.X+box.W/2, box.Y+box.H/2)
-		tester.Frame()
-		stageTestClick(t, tester, "Cancel")
-		if !tester.Focused(T(label)) {
-			t.Fatal("closing the style panel did not restore focus to its button")
-		}
-	} else {
-		if len(tester.Menu()) == 0 {
-			t.Fatalf("pressing %s opened no menu, so the control did not take the press", label)
-		}
-		tester.Release(box.X+box.W/2, box.Y+box.H/2)
-		tester.CloseMenu()
+	if len(tester.Menu()) == 0 {
+		t.Fatalf("pressing %s opened no menu, so the control did not take the press", label)
 	}
+	tester.Release(box.X+box.W/2, box.Y+box.H/2)
+	tester.CloseMenu()
 	settled(tester)
 	if tester.FramePending() {
 		t.Fatalf("%s kept asking for frames after the press ended", label)
@@ -175,11 +165,9 @@ func TestStageLanguageUsesTranslationAndSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	tester.Frame()
-	// 舞台的歌词由字形绘制，不进入无障碍文本；核对交给舞台的显示文本。
-	display := a.stageLyrics(a.pl.Current(), source)
-	if a.settings.StageLanguage != "translation" || display[0].Text != "让风慢慢经过" ||
-		display[0].Translation != "" || display[1].Text != "我们一起出发" {
-		t.Fatalf("translated mode did not replace the primary lyrics: %+v", display)
+	visible := strings.Join(tester.Texts(), "")
+	if !strings.Contains(visible, "让") || !strings.Contains(visible, "经") || strings.Contains(visible, "が") || !tester.HasText("我们一起出发") {
+		t.Fatalf("translated mode did not replace the primary lyrics: %q", tester.Texts())
 	}
 	if err := tester.Click("Lyrics Display"); err == nil {
 		t.Fatal("stage still opens the general lyric display settings")
@@ -199,9 +187,9 @@ func TestStageLanguageUsesTranslationAndSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	shown := makeView(restarted)
-	restored, _ := restarted.pl.Lyrics()
-	if restarted.settings.StageLanguage != "translation" || restarted.stageLyrics(restarted.pl.Current(), restored)[0].Text != "让风慢慢经过" {
-		t.Fatalf("restart lost the stage language: %+v", restarted.settings)
+	visible = strings.Join(shown.Texts(), "")
+	if !strings.Contains(visible, "让") || !strings.Contains(visible, "经") || strings.Contains(visible, "が") || !shown.HasText("我们一起出发") {
+		t.Fatalf("restart lost the stage language: %q", shown.Texts())
 	}
 	for _, choice := range []string{"Original Lyrics", "Bilingual"} {
 		if err := shown.Click("Stage Language"); err != nil {
@@ -211,10 +199,9 @@ func TestStageLanguageUsesTranslationAndSurvivesRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		shown.Frame()
-		lines, _ := restarted.pl.Lyrics()
-		display = restarted.stageLyrics(restarted.pl.Current(), lines)
-		if display[0].Text != "風が通り過ぎる" || (display[0].Translation != "") != (choice == "Bilingual") {
-			t.Fatalf("language %s did not update primary and translated lyrics: %+v", choice, display[0])
+		visible = strings.Join(shown.Texts(), "")
+		if !strings.Contains(visible, "が") || shown.HasText("让风慢慢经过") != (choice == "Bilingual") {
+			t.Fatalf("language %s did not update primary and translated lyrics: %q", choice, shown.Texts())
 		}
 	}
 	if err := shown.Click("Lyrics"); err != nil {
@@ -301,12 +288,12 @@ func TestStageLanguageFrames(t *testing.T) {
 		saveFrame(t, directory, "stage-language-"+name+".png", tester.Image())
 	}
 	a.settings.StageLanguage = "translation"
-	for _, style := range []string{"classic", "rainbow", "ripple", "jump"} {
+	for _, style := range []string{"partita", "tilt", "spotlight", "wave"} {
 		a.settings.StageStyle = style
 		tester.Frame()
 		saveFrame(t, directory, "stage-translation-"+style+".png", tester.Image())
 	}
-	a.settings.StageStyle = "jump"
+	a.settings.StageStyle = "spotlight"
 	compact := ui.NewTester(a.view, 900, 640)
 	compact.SetDark(true)
 	compact.SetPreferences(ui.Preferences{ReduceMotion: true})

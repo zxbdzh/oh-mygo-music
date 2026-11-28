@@ -41,7 +41,6 @@ func (a *app) stageLyrics(track *music.Track, source []lyrics.Line) []lyrics.Lin
 					line.Text = line.Translation
 					// 译文无逐字时间，只按原行区间生成显示动效，不能套用日文原词的逐字时间。
 					line.Words = lyrics.SpreadWords(line.Text, line.At, line.End)
-					line.WordsSource = false
 				}
 				line.Translation = ""
 			}

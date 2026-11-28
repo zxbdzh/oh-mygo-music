@@ -21,19 +21,6 @@ func (a *app) view(c *ui.Context) {
 	c.SetTheme(&t)
 
 	a.checkSleepTimer()
-	tr := a.pl.Current()
-	stageMode := a.settings.StageAnimation.mode()
-	// 只有选了按速度才分析音频，让切进舞台时可以直接用已听到的节奏。
-	a.pl.SetStageTempoEnabled(stageMode == stageTempo && tr != nil && tr.ShowID == "")
-	stageVisible := a.nowPlaying && a.npPane == paneStage
-	if tr != nil && tr.ShowID == "" && (stageMode != stageFixed || stageVisible) {
-		// 隐藏时仍更新选择，但不为速度判断单独安排界面重绘。
-		var stageContext *ui.Context
-		if stageVisible {
-			stageContext = c
-		}
-		a.updateStageDirector(stageContext, tr, false)
-	}
 	a.shortcuts(c)
 	if a.nowPlaying {
 		a.queueOpen = false
@@ -51,7 +38,7 @@ func (a *app) view(c *ui.Context) {
 		c.Root().Background(ui.Transparent)
 	}
 	root := ui.Box(c).Fill()
-	if !c.Focused(a.searchBox) && (a.sharing == nil || !a.sharing.open) && !a.sleep.open && !a.stagePanel.open {
+	if !c.Focused(a.searchBox) && (a.sharing == nil || !a.sharing.open) && !a.sleep.open {
 		// Space plays and pauses wherever the focus is, as in Music. On
 		// the container around everything, it comes before a button the
 		// pointer focused, which would take Space as a click; on the
@@ -114,7 +101,6 @@ func (a *app) view(c *ui.Context) {
 	a.deletePlaylistDialog(c)
 	a.shareDialog(c)
 	a.downloadPromptDialog(c)
-	a.stagePanelView(c)
 	if a.aiToast != nil {
 		c.AddToast(*a.aiToast)
 		a.aiToast = nil
@@ -128,7 +114,7 @@ func (a *app) view(c *ui.Context) {
 }
 
 func (a *app) shortcuts(c *ui.Context) {
-	if (a.sharing != nil && a.sharing.open) || a.downloadPrompt.open || a.stagePanel.open {
+	if (a.sharing != nil && a.sharing.open) || a.downloadPrompt.open {
 		return
 	}
 	// The side buttons of a mouse, the keys of keyboards that have them

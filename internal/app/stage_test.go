@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 	"mygo-music/internal/player"
 )
 
-// 从面板切换样式和强度后，保存重载仍保留选择、火花和原歌词时间。
+// 从菜单切换新增样式和强度后，保存重载仍保留选择、火花和原歌词时间。
 func TestStageChoicesSurviveRestart(t *testing.T) {
 	a, tester, _ := playingApp()
 	a.settings.path = filepath.Join(t.TempDir(), "settings.json")
@@ -23,11 +22,19 @@ func TestStageChoicesSurviveRestart(t *testing.T) {
 	a.nowPlaying, a.npPane = true, paneStage
 	tester.Move(600, 400)
 	tester.Advance(time.Second)
-	stageTestClick(t, tester, "Stage Style", "Rush", "Gentle", "Save and Apply")
-	if a.settings.StageStyle != "rush" || a.settings.StageIntensity != "gentle" {
-		t.Fatal("save did not apply the draft")
+	for _, choice := range []string{"Spotlight", "Gentle", "Sound Wave", "Lively", "Balanced"} {
+		if err := tester.Click("Stage Style"); err != nil {
+			t.Fatal(err)
+		}
+		if err := tester.ChooseMenuItem(choice); err != nil {
+			t.Fatal(err)
+		}
+		tester.Frame()
+		wantIntensity := map[string]string{"Gentle": "gentle", "Lively": "lively", "Balanced": "standard"}[choice]
+		if wantIntensity != "" && a.settings.StageIntensity != wantIntensity {
+			t.Fatalf("chose %s: intensity %q, want %q", choice, a.settings.StageIntensity, wantIntensity)
+		}
 	}
-	stageTestClick(t, tester, "Stage Style", "52 Hz", "Balanced", "Save and Apply")
 	data, err := os.ReadFile(a.settings.path)
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +43,7 @@ func TestStageChoicesSurviveRestart(t *testing.T) {
 	if err := json.Unmarshal(data, &restarted.settings); err != nil {
 		t.Fatal(err)
 	}
-	if restarted.settings.StageStyle != "52hz" || !restarted.settings.StageSparks {
+	if restarted.settings.StageStyle != "wave" || !restarted.settings.StageSparks {
 		t.Fatalf("lost choices after restart: %+v", restarted.settings)
 	}
 	var stored map[string]any
@@ -51,14 +58,21 @@ func TestStageChoicesSurviveRestart(t *testing.T) {
 	}
 }
 
-// 已下架的旧样式 ID 从设置加载后按 Classic 播放。
-func TestWithdrawnStylesFallBackToClassic(t *testing.T) {
-	tr := &music.Track{ID: "withdrawn", Source: "fake"}
+// 五种律动使用简体与译文的统一播放显示，声波强度只影响动效。
+func TestStageStylesUseDisplayedLyrics(t *testing.T) {
+	a, tester, _ := playingApp()
+	a.settings.LyricsScript = "simplified"
+	a.settings.ChineseLyrics = map[string]bool{}
+	a.settings.ChineseLyrics[a.lyricKey(a.pl.Current())] = true
+	a.pl.SetLyrics(lyrics.Build("[00:01]我們一起看風景\n[00:10]那是我們的旅程", "[00:01]讓我們一起看風景\n[00:10]那是我們的旅程"))
+	a.pl.Hold(2 * time.Second)
+	a.nowPlaying, a.npPane = true, paneStage
+	tester.SetPreferences(ui.Preferences{ReduceMotion: true})
 	for _, style := range []string{"", "partita", "tilt", "spotlight", "wave"} {
-		a := newTestApp()
 		a.settings.StageStyle = style
-		if got := a.animationStyle(tr); got != "classic" {
-			t.Errorf("saved style %q played as %q", style, got)
+		tester.Frame()
+		if !tester.HasText("我们一起看风景") || !tester.HasText("让我们一起看风景") {
+			t.Errorf("style %q did not use the shared display: %q", style, tester.Texts())
 		}
 	}
 }
@@ -77,116 +91,47 @@ func TestStageBoundaryWaitTracksLyrics(t *testing.T) {
 	}
 }
 
-func stageTestClick(t *testing.T, tt *ui.Tester, labels ...string) {
-	t.Helper()
-	for _, label := range labels {
-		if err := tt.Click(T(label)); err != nil {
-			t.Fatalf("%s: %v", label, err)
+// Choosing a style from the stage's menu sets its lyrics in it, and
+// choosing Flow goes back to the classic.
+func TestStageStyleMenu(t *testing.T) {
+	a, tt, _ := playingApp()
+	a.nowPlaying, a.npPane = true, paneStage
+	a.pl.Seek(2 * time.Second)
+	tt.Move(600, 400)       // the pointer in the window shows the bar the menu is in
+	tt.Advance(time.Second) // Now Playing slides into place
+	for _, c := range []struct{ item, want string }{{"Steps", "partita"}, {"Tilt", "tilt"}, {"Flow", ""}} {
+		if err := tt.Click("Stage Style"); err != nil {
+			t.Fatal(err)
+		}
+		if err := tt.ChooseMenuItem(c.item); err != nil {
+			t.Fatalf("%v; the menu shows %q", err, tt.Menu())
 		}
 		tt.Frame()
+		if a.settings.StageStyle != c.want {
+			t.Errorf("chose %s: style %q, want %q", c.item, a.settings.StageStyle, c.want)
+		}
 	}
 }
 
-// 选卡片只改草稿。Escape 后继续编辑，取消后把焦点交回入口。
-func TestStagePanelDraftAndFocus(t *testing.T) {
+// Sparks in the stage's menu turns the sparks on, and again off, whatever
+// the style.
+func TestStageSparksMenu(t *testing.T) {
 	a, tt, _ := playingApp()
 	a.nowPlaying, a.npPane = true, paneStage
-	tt.Move(600, 400)
-	tt.Advance(time.Second)
-	stageTestClick(t, tt, "Stage Style", "Rush")
-	if a.settings.StageStyle != "" || a.stagePanel.draft.fixed != "rush" {
-		t.Fatal("card selection leaked from the draft")
-	}
-	tt.Key(0, ui.KeyEscape)
-	tt.Frame()
-	if !a.stagePanel.open || !a.stagePanel.discard || !a.nowPlaying {
-		t.Fatal("Escape did not keep the changed draft in the stage")
-	}
-	stageTestClick(t, tt, "Continue Editing", "Cancel")
-	if a.stagePanel.open || a.settings.StageStyle != "" || !tt.Focused(T("Stage Style")) {
-		t.Fatal("closing the panel did not discard the draft and restore focus")
-	}
-}
-
-// 面板中 Space 只点选当前卡片，保存失败时能保留草稿重试。
-func TestStagePanelKeyboardAndFailedSave(t *testing.T) {
-	a, tt, _ := playingApp()
-	a.settings.path = filepath.Join(t.TempDir(), "settings.json")
-	if err := os.Mkdir(a.settings.path, 0700); err != nil {
-		t.Fatal(err)
-	}
-	a.nowPlaying, a.npPane = true, paneStage
-	tt.Move(600, 400)
-	tt.Advance(time.Second)
-	stageTestClick(t, tt, "Stage Style", "Random", "Rush")
-	playing := a.pl.Playing()
-	tt.Key(0, ui.KeySpace)
-	tt.Frame()
-	if !slices.Contains(a.stagePanel.draft.pool, "rush") || a.pl.Playing() != playing {
-		t.Fatal("Space did not toggle the card independently of playback")
-	}
-	stageTestClick(t, tt, "Sparks", "Save and Apply")
-	if !a.stagePanel.open || a.stagePanel.err == "" || a.settings.StageSparks || !a.stagePanel.draft.sparks {
-		t.Fatal("save failure did not preserve the draft or the previous settings")
-	}
-}
-
-// 单曲指定立即生效，取消后恢复全局设置，面板草稿可独立放弃。
-func TestStagePanelPin(t *testing.T) {
-	a, tt, _ := playingApp()
-	a.nowPlaying, a.npPane = true, paneStage
-	tt.Move(600, 400)
-	tt.Advance(time.Second)
-	stageTestClick(t, tt, "Stage Style", "Classic Lyrics", "Set for This Song…", "Rush")
-	tr := a.pl.Current()
-	if a.animationStyle(tr) != "rush" || a.stagePanel.draft.fixed != "classic" || a.settings.StageStyle != "" {
-		t.Fatal("song override did not apply independently of the draft")
-	}
-	stageTestClick(t, tt, "Clear Song Style", "Cancel")
-	if a.animationStyle(tr) != "classic" {
-		t.Fatal("clearing song override did not restore fixed style")
-	}
-}
-
-// 速度档保存后独立于固定样式；没有可分析的音频时仍用固定样式。
-func TestStagePanelTempoFallback(t *testing.T) {
-	a, tt, _ := playingApp()
-	a.settings.path = filepath.Join(t.TempDir(), "settings.json")
-	a.settings.StageStyle = "marquee"
-	a.nowPlaying, a.npPane = true, paneStage
-	tt.Move(600, 400)
-	tt.Advance(time.Second)
-	stageTestClick(t, tt, "Stage Style", "By Tempo", "120–149 BPM", "Rush", "Save and Apply")
-	a.pl.Hold(20 * time.Second)
-	tt.Frame()
-	if a.stagePanel.open || a.animationStyle(a.pl.Current()) != "marquee" {
-		t.Fatal("tempo without audio should fall back to the fixed style")
-	}
-	data, err := os.ReadFile(a.settings.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stored settings
-	if err := json.Unmarshal(data, &stored); err != nil {
-		t.Fatal(err)
-	}
-	if want := ([4]string{"vinyl", "52hz", "rush", "jump"}); stored.StageAnimation.mode() != stageTempo || stored.StageAnimation.speed() != want || stored.StageStyle != "marquee" {
-		t.Fatalf("saving one tempo band changed other choices: %s", data)
-	}
-}
-
-// 换歌后结束上首歌的指定操作，避免点中的卡片误写到下一首。
-func TestStagePanelPinCancelsOnTrackChange(t *testing.T) {
-	a, tt, _ := playingApp()
-	a.nowPlaying, a.npPane = true, paneStage
-	tt.Move(600, 400)
-	tt.Advance(time.Second)
-	stageTestClick(t, tt, "Stage Style", "Set for This Song…")
-	a.pl.Cue([]music.Track{song("new", "下一首")})
-	tt.Frame()
-	stageTestClick(t, tt, "Rush")
-	if !a.stagePanel.open || a.stagePanel.pinning || len(a.settings.StageAnimation.Songs) != 0 || a.stagePanel.draft.fixed != "rush" {
-		t.Fatal("changing the track did not return the cards to draft editing")
+	a.settings.StageStyle = "tilt"
+	tt.Move(600, 400)       // the pointer in the window shows the bar the menu is in
+	tt.Advance(time.Second) // Now Playing slides into place
+	for _, want := range []bool{true, false} {
+		if err := tt.Click("Stage Style"); err != nil {
+			t.Fatal(err)
+		}
+		if err := tt.ChooseMenuItem("Sparks"); err != nil {
+			t.Fatalf("%v; the menu shows %q", err, tt.Menu())
+		}
+		tt.Frame()
+		if a.settings.StageSparks != want || a.settings.StageStyle != "tilt" {
+			t.Errorf("sparks %v in %q, want %v in tilt", a.settings.StageSparks, a.settings.StageStyle, want)
+		}
 	}
 }
 
@@ -216,10 +161,69 @@ func TestTimedLyricsReachTheStage(t *testing.T) {
 	}
 
 	a.pl.Hold(2500 * time.Millisecond)
-	// 舞台把歌词画成字形，不回无障碍文本；交给舞台的显示行仍要保留逐词时间和译文。
-	lines, _ := a.pl.Lyrics()
-	display := a.stageLyrics(a.pl.Current(), lines)
-	if len(display) != 2 || display[0].Text != "hello world" || display[0].Translation != "你好世界" {
-		t.Fatalf("stage display %+v", display)
+	a.nowPlaying, a.npPane = true, paneStage
+	tt := ui.NewTester(a.view, 1200, 800)
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
+	settled(tt)
+	for _, want := range []string{"hello ", "world", "你好世界", "the next line"} {
+		if !tt.HasText(want) {
+			t.Errorf("no %q on the stage: %q", want, tt.Texts())
+		}
+	}
+}
+
+func words(texts ...string) []lyrics.Word {
+	out := make([]lyrics.Word, len(texts))
+	for i, s := range texts {
+		out[i] = lyrics.Word{Text: s, Start: time.Duration(i) * time.Second, End: time.Duration(i+1) * time.Second}
+	}
+	return out
+}
+
+// A line breaks at its spaces and punctuation, punctuation staying with
+// the word before it and a contraction whole, and a long run of
+// characters in pieces.
+func TestStageUnits(t *testing.T) {
+	for _, c := range []struct {
+		words []lyrics.Word
+		want  [][2]int
+	}{
+		{words("从", "不 ", "主", "动 ", "示", "弱"), [][2]int{{0, 2}, {2, 4}, {4, 6}}},
+		{words("Hello", ", ", "It", "’", "s ", "me"), [][2]int{{0, 2}, {2, 5}, {5, 6}}},
+		{words("I ", "never ", "show"), [][2]int{{0, 1}, {1, 2}, {2, 3}}},
+		{words("曾", "经", "的", "那", "些", "发", "生", "过"), [][2]int{{0, 4}, {4, 8}}},
+	} {
+		got := stageUnits(c.words)
+		if len(got) != len(c.want) {
+			t.Errorf("%v: units %v, want %v", c.words, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%v: units %v, want %v", c.words, got, c.want)
+				break
+			}
+		}
+	}
+}
+
+// Tilt splits a line into parts that follow one another, none empty, and
+// rather after punctuation than nearest the middle.
+func TestTiltSplitsAtPunctuation(t *testing.T) {
+	ws := words("夜", "空", "中", "最", "亮", "的", "星，", "能", "否", "听", "清")
+	units := stageUnits(ws)
+	for n := 1; n <= min(4, len(units)); n++ {
+		parts := splitParts(ws, units, n)
+		if len(parts) != n || parts[0].from != 0 || parts[n-1].to != len(ws) {
+			t.Fatalf("%d parts: %+v", n, parts)
+		}
+		for i := 1; i < n; i++ {
+			if parts[i].from != parts[i-1].to || parts[i].from >= parts[i].to {
+				t.Fatalf("%d parts: %+v", n, parts)
+			}
+		}
+	}
+	if parts := splitParts(ws, units, 2); parts[0].to != 7 {
+		t.Errorf("split at %d, not after 星，", parts[0].to)
 	}
 }

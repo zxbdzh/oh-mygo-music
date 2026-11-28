@@ -71,29 +71,26 @@ type Player struct {
 	feeding  bool // the feed is asked
 	awaiting bool // at the queue's end, for what the feed gives
 
-	track              *music.Track
-	out                audioOutput
-	newOutput          func(audio.Decoder) audioOutput
-	stream             stream
-	stagePlaybackID    uint64
-	stageTempoRevision uint64
-	stageTempoEnabled  bool
-	watch              *watched      // stream, as out plays it
-	info               *music.Stream // what the current track streams
-	fade               fader
-	gain               float64 // the current track's normalizing gain
-	loading            bool
-	playing            bool // what the listener wants: false while paused
-	err                string
-	feedback           PlaybackFeedback
-	liveMu             sync.Mutex // 后台解析/缓冲阶段直接写入并按 gen 隔离，不阻塞主线程 post 通道。
-	liveGen            int
-	liveStage          string
-	liveTried          int
-	gen                int // counts loads, to drop the results of stale ones
-	loadCancel         context.CancelFunc
-	playback           *playbackAttempt
-	monitorCancel      context.CancelFunc
+	track      *music.Track
+	out        audioOutput
+	newOutput  func(audio.Decoder) audioOutput
+	stream     stream
+	watch      *watched      // stream, as out plays it
+	info       *music.Stream // what the current track streams
+	fade       fader
+	gain       float64 // the current track's normalizing gain
+	loading    bool
+	playing    bool // what the listener wants: false while paused
+	err        string
+	feedback   PlaybackFeedback
+	liveMu     sync.Mutex // 后台解析/缓冲阶段直接写入并按 gen 隔离，不阻塞主线程 post 通道。
+	liveGen    int
+	liveStage  string
+	liveTried  int
+	gen        int // counts loads, to drop the results of stale ones
+	loadCancel context.CancelFunc
+	playback   *playbackAttempt
+	monitorCancel context.CancelFunc
 
 	lyrics           []lyrics.Line
 	lyricsSource     *music.Lyrics
@@ -250,8 +247,6 @@ func (p *Player) ended() {
 			// 只有真实正常结束才开启新一遍；错误仍走原播放的最终失败分支。
 			p.playback = &playbackAttempt{dir: p.playback.dir, policy: p.playback.policy}
 		}
-		p.invalidateStageTempo()
-		p.stagePlaybackID++
 		p.out.Seek(0)
 		p.out.Play()
 		if p.playback != nil && p.playback.policy.candidate > 0 {
@@ -700,7 +695,6 @@ func (p *Player) TogglePlay() {
 			if p.playback != nil {
 				if p.playback.completed {
 					p.playback = &playbackAttempt{dir: stay, policy: p.playback.policy}
-					p.stagePlaybackID++
 					from = 0
 				} else {
 					p.playback.dir, p.playback.skipped = stay, 0
@@ -746,8 +740,6 @@ func (p *Player) TogglePlay() {
 				return
 			}
 			p.playback = &playbackAttempt{dir: stay, policy: p.playback.policy}
-			p.invalidateStageTempo()
-			p.stagePlaybackID++
 			out.Seek(0)
 		} else {
 			p.playback.dir, p.playback.skipped = stay, 0
@@ -801,7 +793,6 @@ func (p *Player) Seek(t time.Duration) {
 		p.loadPlayback(p.at, 0, stay, p.playing, t, p.playback)
 		return
 	}
-	p.invalidateStageTempo()
 	if p.remote != nil && p.remote.started {
 		p.remoteSeek(t)
 		return
@@ -1034,11 +1025,6 @@ func (p *Player) loadSkipping(at, skipped, dir int, play bool, from time.Duratio
 }
 
 func (p *Player) loadPlayback(at, skipped, dir int, play bool, from time.Duration, playback *playbackAttempt) {
-	if playback == nil || playback != p.playback {
-		p.stagePlaybackID++
-	}
-	// 重建音频流只清除待应用的节奏，不重开本次播放的自动换样式额度。
-	p.stageTempoRevision++
 	if playback == nil {
 		playback = &playbackAttempt{dir: dir, skipped: skipped}
 	}
@@ -1089,20 +1075,20 @@ func (p *Player) loadPlayback(at, skipped, dir int, play bool, from time.Duratio
 		info, s, err = p.openWithFeedback(src, t, quality, pre, func() {
 			p.setLiveStage(gen, "buffering")
 		})
-		settings := p.transitionSettings()
-		if err == nil && p.Transitions != nil && settings.Crossfade {
-			s, err = trimSilenceStream(s)
-		}
-		if err == nil && p.Transitions != nil {
-			trimmedFrom := max(from-silenceTrimOffset(s), 0)
-			var prepared stream
-			prepared, err = prepareStream(context.Background(), s, trimmedFrom)
-			if err == nil {
-				s = prepared
-			} else {
-				s.Close()
+			settings := p.transitionSettings()
+			if err == nil && p.Transitions != nil && settings.Crossfade {
+				s, err = trimSilenceStream(s)
 			}
-		}
+			if err == nil && p.Transitions != nil {
+				trimmedFrom := max(from-silenceTrimOffset(s), 0)
+				var prepared stream
+				prepared, err = prepareStream(context.Background(), s, trimmedFrom)
+				if err == nil {
+					s = prepared
+				} else {
+					s.Close()
+				}
+			}
 		p.post(func() {
 			if gen != p.gen {
 				if s != nil {
@@ -1130,7 +1116,6 @@ func (p *Player) startLoaded(ctx context.Context, gen int, s stream, info *music
 		return err
 	}
 	p.stream, p.info = s, info
-	setStreamTempoEnabled(s, p.stageTempoEnabled)
 	p.gain = normGain(info)
 	watch := &watched{stream: s, now: p.now, ended: func() { p.post(func() {}) }, failed: make(chan error, 1)}
 	p.watch = watch

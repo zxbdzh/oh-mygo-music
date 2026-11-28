@@ -41,7 +41,7 @@ type transitionBuffer struct {
 }
 
 func newTransitionBuffer(decoder audio.Decoder) *transitionBuffer {
-	// 十二秒淡化还需要提前看到正常 EOF；节奏分析仅在按速度模式启用时运行。
+	// 十二秒淡化还需要提前看到正常 EOF；轻量预读只测音量，不运行节拍或模型分析。
 	buffer := &transitionBuffer{decoder: decoder, length: decoder.Len(), capacity: (16*48000 + 1023) / 1024, actualEnd: -1, firstActive: -1}
 	buffer.chunks = make(chan transitionChunk, buffer.capacity)
 	buffer.done = make(chan struct{})

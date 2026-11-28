@@ -212,7 +212,7 @@ func lyricsSkeleton(c *ui.Context, s shimmer) {
 	})
 }
 
-// stageSkeleton is the stage's words while the lyrics load.
+// stageSkeleton is stageLine's words while the lyrics load.
 func stageSkeleton(c *ui.Context, s shimmer, f, w float32) {
 	ui.Row(c).Wrap().Justify(ui.Center).AlignItems(ui.Center).Padding(0, w*0.1).Gap(f * 0.35).Children(func() {
 		for i, n := range []float32{2.2, 1.3, 3.1, 1.8} {

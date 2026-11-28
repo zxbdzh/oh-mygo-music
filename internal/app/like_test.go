@@ -380,8 +380,7 @@ func stageFrames(t *testing.T, style, path string) {
 	tt := ui.NewTester(a.view, 1200, 800)
 	tt.SetDark(true)
 	tt.Advance(time.Second)
-	// 前奏、逐词演唱、间奏与一条纯行时间的长歌词各留一帧以上。
-	moments := []time.Duration{12900, 13300, 13800, 14600, 15900, 17900, 18500, 26000, 32800}
+	moments := []time.Duration{12900, 13300, 13800, 14600, 15900, 17300, 17900, 18500, 26000}
 	img := tt.Image()
 	cw, ch := img.Bounds().Dx()/3, img.Bounds().Dy()/3
 	grid := image.NewRGBA(image.Rect(0, 0, cw*3, ch*3))

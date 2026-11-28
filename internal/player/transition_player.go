@@ -157,7 +157,6 @@ func (p *Player) prepareTransitionAt(index int, failed map[int]bool) {
 				return
 			}
 			preparation.info, preparation.stream = info, prepared
-			setStreamTempoEnabled(prepared, p.stageTempoEnabled)
 			preparation.playback.policy = policy
 			preparation.watch = &watched{stream: prepared, now: p.now, ended: func() {}, failed: make(chan error, 1)}
 			settings := p.transitionSettings()
@@ -373,7 +372,6 @@ func (p *Player) commitTransitions() {
 		p.at = position
 		p.track = &preparation.track
 		p.info, p.stream, p.watch = preparation.info, preparation.stream, preparation.watch
-		p.stagePlaybackID++
 		p.playback = preparation.playback
 		p.gain = normGain(p.info)
 		p.transitionStart = event.frame
