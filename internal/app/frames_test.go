@@ -215,17 +215,10 @@ func TestStageStylesFrame(t *testing.T) {
 	for _, style := range stageStyles {
 		a.settings.StageStyle = style.id
 		tester.Frame()
-		saveFrame(t, dir, "stage-"+map[string]string{"": "flow", "partita": "steps", "tilt": "tilt", "spotlight": "spotlight", "wave": "wave"}[style.id]+".png", tester.Image())
+		saveFrame(t, dir, "stage-"+style.id+".png", tester.Image())
 	}
-	a.pl.Hold(7 * time.Second)
-	for _, style := range []string{"spotlight", "wave"} {
-		a.settings.StageStyle = style
-		tester.Frame()
-		saveFrame(t, dir, "interlude-"+style+".png", tester.Image())
-	}
-	a.pl.Hold(2 * time.Second)
 	tester.SetPreferences(ui.Preferences{})
-	for _, style := range []string{"spotlight", "wave"} {
+	for _, style := range []string{"ripple", "marquee"} {
 		a.settings.StageStyle = style
 		for _, intensity := range []string{"gentle", "standard", "lively"} {
 			a.settings.StageIntensity = intensity
@@ -233,6 +226,43 @@ func TestStageStylesFrame(t *testing.T) {
 			saveFrame(t, dir, "stage-"+style+"-"+intensity+".png", tester.Image())
 		}
 	}
+}
+
+var stagePreviewLyricsZH = stageChinesePreview("让晚风慢慢经过", "星光落在路上", "我们一起出发")
+
+// 用实际面板拍摄三种换法及窄窗，方便核对真实预览与控件布局。
+func TestStageAnimationPanelFrames(t *testing.T) {
+	dir := framesDir(t)
+	language := i18n.Language()
+	i18n.SetLanguage(i18n.Chinese)
+	t.Cleanup(func() { i18n.SetLanguage(language) })
+	a, tt, _ := playingApp()
+	tr := a.pl.Current()
+	tr.Album.ImageURL = "stage-panel-cover"
+	giveCover(a, tr.Album.ImageURL, coverImage(ui.RGB(25, 92, 132), ui.RGB(210, 164, 82)))
+	a.nowPlaying, a.npPane = true, paneStage
+	a.pl.Hold(2 * time.Second)
+	a.settings.StageStyle = "classic"
+	tt.SetDark(true)
+	tt.SetLocale("zh-CN")
+	tt.Move(600, 400)
+	tt.Advance(time.Second)
+	saveFrame(t, dir, "stage-animation-entry.png", tt.Image())
+	stageTestClick(t, tt, "Stage Style")
+	saveFrame(t, dir, "stage-animation-panel.png", tt.Image())
+	stageTestClick(t, tt, "Random")
+	saveFrame(t, dir, "stage-animation-panel-random.png", tt.Image())
+	stageTestClick(t, tt, "Fixed")
+	if r, ok := tt.Find(T("Rush")); ok {
+		tt.Scroll(r.X+r.W/2, r.Y+r.H/2, 0, 720)
+	}
+	tt.Advance(600 * time.Millisecond)
+	saveFrame(t, dir, "stage-animation-panel-scrolled.png", tt.Image())
+	stageTestClick(t, tt, "By Tempo")
+	saveFrame(t, dir, "stage-animation-panel-tempo.png", tt.Image())
+	tt.SetSize(590, 620)
+	tt.Frame()
+	saveFrame(t, dir, "stage-animation-panel-narrow.png", tt.Image())
 }
 
 // With MM_FRAMES set, saves Now Playing for a local song with no cover.

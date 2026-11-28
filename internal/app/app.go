@@ -177,6 +177,11 @@ type app struct {
 	lyricTrack    string
 	lyricDisplay  lyricDisplayCache
 	stageDisplay  stageLyricCache
+	stageDirector stageDirector
+	stagePanel    stagePanelState
+	stageList     stageListState
+	stageVinyl    stageVinylCache
+	stageJump     jumpCache
 	sharing       *shareDraft
 	queueOpen     bool
 	queueButton   ui.Handle

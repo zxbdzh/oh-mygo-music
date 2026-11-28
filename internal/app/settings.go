@@ -95,10 +95,10 @@ type settings struct {
 	CardDirectory           string          `json:"cardDirectory,omitempty"`
 	// ShareServerURL is the user's own HTTPS service; its token is stored in the OS credential store.
 	ShareServerURL string `json:"shareServerUrl,omitempty"`
-	// StageStyle is how the stage sets its lyrics (stageStyles): empty for
-	// Folia's classic, or the id of another of its visualizers.
-	StageStyle     string `json:"stageStyle,omitempty"`
-	StageIntensity string `json:"stageIntensity,omitempty"`
+	// StageStyle 是固定样式，也是测速不可用时的指定样式；已下架的旧样式加载时回落 Classic。
+	StageStyle     string                 `json:"stageStyle,omitempty"`
+	StageAnimation stageAnimationSettings `json:"stageAnimation,omitzero"`
+	StageIntensity string                 `json:"stageIntensity,omitempty"`
 	// 律动独立选择原文、译文或双语；空值保留原有双语呈现。
 	StageLanguage string `json:"stageLanguage,omitempty"`
 	// PlayerStyle is how Now Playing shows the song playing
@@ -212,8 +212,11 @@ func settingsPath() (string, error) {
 // loadSettings reads the settings, or returns the defaults.
 func loadSettings() settings {
 	s := defaultSettings()
+	s.StageStyle = "classic"
 	if path, err := settingsPath(); err == nil {
 		if b, err := os.ReadFile(path); err == nil {
+			// 旧配置缺失 stageStyle 时用 Classic；存的已下架样式由 stageStyleOrClassic 回落。
+			s.StageStyle = "classic"
 			json.Unmarshal(b, &s)
 			s.CoverBackdropStyle.Blur = min(100, max(0, s.CoverBackdropStyle.Blur))
 			s.CoverBackdropStyle.Shade = min(100, max(0, s.CoverBackdropStyle.Shade))

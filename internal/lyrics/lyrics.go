@@ -19,6 +19,7 @@ type Line struct {
 	End         time.Duration
 	AtSource    bool // 真实歌词时间轴提供了这句的起点
 	EndSource   bool // 真实歌词时间轴提供了这句的终点
+	WordsSource bool // 区分源逐词时间与从整句均分的估时
 	Text        string
 	Translation string
 	Words       []Word
@@ -76,7 +77,7 @@ func FromSource(l *music.Lyrics) []Line {
 	out := make([]Line, 0, len(l.Lines))
 	for _, sl := range l.Lines {
 		line := Line{
-			At: ms(sl.Start), End: ms(sl.End), AtSource: true, EndSource: sl.End > sl.Start,
+			At: ms(sl.Start), End: ms(sl.End), AtSource: true, EndSource: sl.End > sl.Start, WordsSource: len(sl.Words) > 0,
 			Text: strings.TrimSpace(sl.Text), Translation: sl.Translation,
 		}
 		for _, w := range sl.Words {

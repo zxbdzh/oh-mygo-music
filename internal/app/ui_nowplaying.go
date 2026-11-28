@@ -449,12 +449,13 @@ func (a *app) nowPlayingBody(c *ui.Context, tr *music.Track, art *artwork, accen
 		if a.npPane == paneStage {
 			// The stage takes the whole view: the lyrics are the show, the
 			// controls a slim bar at the foot.
-			a.npRise(reveal(npTabsRow(c, w), pointerIn), 0).Children(func() {
+			style := a.animationStyle(tr)
+			a.npRise(reveal(npTabsRow(c, w), pointerIn || a.stagePanel.open), 0).Children(func() {
 				a.paneTabs(c)
-				a.stageStyleButton(c)
+				a.stageStyleButton(c, style)
 				a.stageLanguageButton(c)
 			})
-			a.stage(c, tr, accent)
+			a.stage(c, tr, art, style, accent)
 			a.stageBar(c, tr, art, accent)
 			return
 		}
