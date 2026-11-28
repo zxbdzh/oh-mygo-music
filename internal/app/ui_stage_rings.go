@@ -29,17 +29,20 @@ const (
 	ringsOpacity    = 0.8   // 年轮浓度
 	ringsWideHalf   = 0.42  // 宽字的字身半高（按字号）
 	ringsLatinHalf  = 0.38  // 拉丁字的字身半高
+	ringsGlowRadius = 0.39  // 点亮字的阴影半径（按字号，原版 Shadow 的 blurRadius）
 )
 
 type ringsGlyph struct {
 	glyphs     []ui.Glyph
+	text       string  // 单个字，辉光排版要用
 	x, y       float32 // 字心
 	rotation   float32 // 角度
 	scale      float32
-	width      float32
+	width      float32 // 原始步进宽（不含词间距）
 	wide       bool
-	row, word  int
+	row, word  int // 宽字的 word 是 -1，和原版一致
 	start, end time.Duration
+	glow       *cinGlow // 点亮后每帧复用同一份阴影排版
 }
 
 type ringsRect struct {
@@ -53,7 +56,10 @@ type ringsLayout struct {
 	fine   []ringsRect // 宽字一字一个，拉丁字母按词合成一个
 	coarse []ringsRect // 每行合并到不超过 6 个，远处用
 	size   float32
-	at, end time.Duration
+	font   ui.Font // 塑形字体，辉光排版复用
+	// 辉光排版按行盒居中；字身用同一组度量对齐，避免亮字和暗字错半像素。
+	ascent, descent float32
+	at, end         time.Duration
 }
 
 // ringsWide 是原模组的 WIDE_CHAR：CJK、假名、谚文、全角标点。
@@ -89,6 +95,8 @@ func buildRingsLayout(line *lyrics.Line, em, w, h float32, lang string) *ringsLa
 	}
 	out.size = size
 	font := ui.Font{Size: size, Weight: 700, Lang: lang, LineHeight: ringsLineHeight}
+	m := font.Metrics()
+	out.font, out.ascent, out.descent = font, m.Ascent, m.Descent
 	starts, ends := colorStageTimings(line, text, len(chars))
 
 	hash := fnv.New32a()
@@ -104,12 +112,14 @@ func buildRingsLayout(line *lyrics.Line, em, w, h float32, lang string) *ringsLa
 	for ri, row := range rows {
 		// 先算这一行的步进：相邻宽字多留 0.06 字高，拉丁词内只留 0.02。
 		advance := make([]float32, len(row))
+		raw := make([]float32, len(row))
 		for i, ci := range row {
 			g := ui.Shape(string(chars[ci]), font)
 			var width float32
 			if len(g) > 0 {
 				width = g[len(g)-1].X + g[len(g)-1].Advance
 			}
+			raw[i] = width
 			gap := float32(0)
 			if i+1 < len(row) {
 				nextWide := ringsWide(chars[row[i+1]])
@@ -128,17 +138,19 @@ func buildRingsLayout(line *lyrics.Line, em, w, h float32, lang string) *ringsLa
 		}
 		cursor := w/2 - sum/2 + between(-.04, .04)*size
 		rowY := top + step*float32(ri)
-		var wordOffset [2]float32
+		// 原版每个拉丁词共用一组 (纵向错位, 旋转, 缩放)；宽字和空格没有词。
+		var wordOffset [3]float32
 		hasWord := false
 		for i, ci := range row {
 			ch := chars[ci]
 			wide := ringsWide(ch)
 			if unicode.IsSpace(ch) || wide {
 				hasWord = false
+				wordOffset = [3]float32{}
 			}
 			if !unicode.IsSpace(ch) {
 				if !wide && !hasWord {
-					wordOffset = [2]float32{between(-.1, .1), between(-.05, .05)}
+					wordOffset = [3]float32{between(-.1, .1), between(-.05, .05), between(.94, 1.06)}
 					hasWord = true
 					wordID++
 				}
@@ -146,14 +158,23 @@ func buildRingsLayout(line *lyrics.Line, em, w, h float32, lang string) *ringsLa
 				if wide {
 					jitter = 1
 				}
-				x := cursor + advance[i]/2 - size*.02 + between(-.035, .035)*size*jitter
+				// 字心按原始步进算，不扣那 0.02 字高；词间距只影响落笔位置。
+				x := cursor + raw[i]/2 + between(-.035, .035)*size*jitter
 				y := rowY + (wordOffset[0]+between(-.11, .11)*jitter)*size
 				rotation := wordOffset[1] + between(-.075, .075)*jitter
-				scale := 1 + between(-.07*jitter, .07*jitter)
+				wordScale := float32(1)
+				if hasWord {
+					wordScale = wordOffset[2]
+				}
+				scale := wordScale * (1 + between(-.07*jitter, .07*jitter))
+				word := wordID
+				if wide {
+					word = -1
+				}
 				out.glyphs = append(out.glyphs, ringsGlyph{
-					glyphs: ui.Shape(string(ch), font), x: x, y: y,
-					rotation: rotation * 180 / math.Pi, scale: scale, width: advance[i],
-					wide: wide, row: ri, word: wordID,
+					glyphs: ui.Shape(string(ch), font), text: string(ch), x: x, y: y,
+					rotation: rotation * 180 / math.Pi, scale: scale, width: raw[i],
+					wide: wide, row: ri, word: word,
 					start: starts[ci], end: ends[ci],
 				})
 			}
@@ -298,41 +319,41 @@ func (d colorStagePaint) drawRingsGlyphs(l *ringsLayout, alpha float32) {
 	if l == nil || alpha <= 0 {
 		return
 	}
-	for _, g := range l.glyphs {
+	for i := range l.glyphs {
+		g := &l.glyphs[i]
 		if len(g.glyphs) == 0 {
 			continue
 		}
 		progress := float32(1)
 		if d.s.motion != 0 {
-			progress = ringsLightProgress(d.s.pos, g)
+			progress = ringsLightProgress(d.s.pos, *g)
 		}
 		lit := easeOutCubic(progress)
 		scale := g.scale
 		if d.s.motion != 0 && progress > 0 && progress < 1 {
 			scale *= 1 + ringsSwell*float32(math.Sin(math.Pi*float64(progress)))
 		}
-		ox := g.x - g.width/2
-		oy := g.y + l.size*.35
-		// Transform 的 (g.x, g.y) 只是旋转/缩放原点，不能再叠一次平移，否则字会跑出屏幕。
-		draw := func(ink ui.Color) {
-			d.p.Transform(ui.Rotation(g.rotation).Then(ui.Scaling(scale, scale)), g.x, g.y, func() {
-				d.p.Glyphs(g.glyphs, ox, oy, ink)
-			})
+		transform := func(draw func()) {
+			d.p.Transform(ui.Rotation(g.rotation).Then(ui.Scaling(scale, scale)), g.x, g.y, draw)
 		}
-		draw(white.Alpha(ringsDim * alpha))
-		if lit > 0 {
-			if progress > 0 && progress < 1 && !d.light {
-				// 贴字形柔光近似原版的阴影光晕。
-				for i := 0; i < 4; i++ {
-					angle := float64(i) * math.Pi / 2
-					r := l.size * .06
-					d.p.Transform(ui.Rotation(g.rotation).Then(ui.Scaling(scale, scale)), g.x, g.y, func() {
-						d.p.Glyphs(g.glyphs, ox+float32(math.Cos(angle))*r, oy+float32(math.Sin(angle))*r, d.s.accent.Alpha(.16*lit*alpha))
-					})
-				}
-			}
-			draw(white.Alpha(lit * alpha))
+		// 暗字按行盒居中画；亮字连同阴影走同一份排版，两种画法共用同一组度量才对得齐。
+		transform(func() {
+			d.p.Glyphs(g.glyphs, g.x-g.width/2, g.y+(l.ascent-l.descent)/2, white.Alpha(ringsDim*alpha))
+		})
+		if lit <= 0 {
+			continue
 		}
+		level := int(math.Round(float64(clamp01(lit*alpha)) * cinGlowLevels))
+		if level <= 0 {
+			continue
+		}
+		// 原版唱到的字一直挂着同色阴影（半径 0.39 字高），不只点亮途中。
+		blur := 2 * (.57735*l.size*ringsGlowRadius + .5)
+		layout := glowLayoutFor(g.text, l.font, &g.glow, blur, level, d.s.accent)
+		_, h := layout.Size()
+		transform(func() {
+			d.p.TextLayout(layout, g.x-g.width/2, g.y-h/2, white.Alpha(lit*alpha))
+		})
 	}
 }
 

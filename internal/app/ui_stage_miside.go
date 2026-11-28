@@ -36,7 +36,10 @@ const (
 // misideChar 是一个字：单独塑形好的字形，加上它在舞台上的字框和基线。
 type misideChar struct {
 	glyphs   []ui.Glyph
-	x, y     float32 // 字框左上角
+	text     string   // 单个字，深投影排版要用
+	font     ui.Font  // 塑形字体，和字面同一份
+	deep     *cinGlow // 最底层挤出的深投影缓存
+	x, y     float32  // 字框左上角
 	w, h     float32
 	baseline float32
 	start    time.Duration
@@ -103,7 +106,8 @@ func buildMisideLayout(line *lyrics.Line, em, w, h float32, lang string) *miside
 		}
 		box := rects[0]
 		out.chars = append(out.chars, misideChar{
-			glyphs: glyphs, x: left + box.X, y: top + box.Y, w: box.W, h: box.H,
+			glyphs: glyphs, text: string(r), font: font,
+			x: left + box.X, y: top + box.Y, w: box.W, h: box.H,
 			baseline: top + baseline, start: starts[i],
 		})
 	}
@@ -209,8 +213,8 @@ func (d colorStagePaint) miside(l *misideLayout, old [2]*misideLayout, ends [2]t
 		}
 		if l != nil {
 			unit := l.size / misideBaseFont
-			for _, ch := range l.chars {
-				d.misideExtruded(ch, unit, 1)
+			for i := range l.chars {
+				d.misideExtruded(&l.chars[i], unit, 1)
 			}
 		}
 		return
@@ -226,8 +230,8 @@ func (d colorStagePaint) miside(l *misideLayout, old [2]*misideLayout, ends [2]t
 	}
 	if d.s.pos < l.end {
 		unit := l.size / misideBaseFont
-		for _, ch := range l.chars {
-			if d.s.pos >= ch.start {
+		for i := range l.chars {
+			if ch := &l.chars[i]; d.s.pos >= ch.start {
 				d.misideExtruded(ch, unit, 1)
 			}
 		}
@@ -240,7 +244,8 @@ func (d colorStagePaint) miside(l *misideLayout, old [2]*misideLayout, ends [2]t
 func (d colorStagePaint) misideRows(l *misideLayout, age, ground, alpha float32, still bool) {
 	unit := l.size / misideBaseFont
 	seed := float64(l.line.At/time.Millisecond) / 1000
-	for i, ch := range l.chars {
+	for i := range l.chars {
+		ch := &l.chars[i]
 		a := age - float32(i)*misideStagger
 		if a <= 0 {
 			// 还没轮到它掉：停在打字的位置
@@ -252,7 +257,7 @@ func (d colorStagePaint) misideRows(l *misideLayout, age, ground, alpha float32,
 }
 
 // misideDrop 画一个掉落中的字：按原模组的取数顺序生成初速度、角速度、重力和回弹。
-func (d colorStagePaint) misideDrop(ch misideChar, age, ground, unit float32, seed float64, alpha float32, still bool) {
+func (d colorStagePaint) misideDrop(ch *misideChar, age, ground, unit float32, seed float64, alpha float32, still bool) {
 	random := func(k float64) float32 { return lineRandom(seed, k) }
 	spread := float32(.3) // 整句一起落时横向散开收到三成，否则像爆开
 	vx := (random(1) - .5) * 170 * spread * unit
@@ -279,22 +284,31 @@ func (d colorStagePaint) misideDrop(ch misideChar, age, ground, unit float32, se
 }
 
 // misideExtruded 画一个字的实体厚度：7 层从深到浅的灰阶挤出（跟着字面颜色走），再压上白字面，
-// 最深一层带深投影。MyGo 没有模糊，投影用两层偏移黑影近似原版 24px 的柔边。
-func (d colorStagePaint) misideExtruded(ch misideChar, unit, alpha float32) {
+// 最深一层带深投影（文字阴影，模糊 24 个字高单位）。
+func (d colorStagePaint) misideExtruded(ch *misideChar, unit, alpha float32) {
 	d.misideExtrudedAt(ch, 0, 0, unit, alpha)
 }
 
-func (d colorStagePaint) misideExtrudedAt(ch misideChar, dx, dy, unit, alpha float32) {
+func (d colorStagePaint) misideExtrudedAt(ch *misideChar, dx, dy, unit, alpha float32) {
 	if alpha <= 0 {
 		return
 	}
 	x, base := ch.x+dx, ch.baseline+dy
-	d.p.Glyphs(ch.glyphs, x+6*unit, base+9*unit, ui.RGB(0, 0, 0).Alpha(.24*alpha))
-	d.p.Glyphs(ch.glyphs, x+3*unit, base+5*unit, ui.RGB(0, 0, 0).Alpha(.5*alpha))
+	// 原版最底下那层挤出带 88% 黑的深投影（偏移 3/5、模糊 24 个字高单位）；
+	// 旧写法用两层错位黑影近似，放大后没有真正的柔边。
+	asc := ch.font.Metrics().Ascent
+	level := int(math.Round(float64(clamp01(alpha)) * cinGlowLevels))
 	for i := misideLayers - 1; i >= 0; i-- {
 		gray := 168 + (64-168)*i/(misideLayers-1)
 		off := float32(i+1) * unit
-		d.p.Glyphs(ch.glyphs, x+off, base+off, ui.RGB(uint8(gray), uint8(gray), uint8(min(255, gray+5))).Alpha(alpha))
+		ink := ui.RGB(uint8(gray), uint8(gray), uint8(min(255, gray+5))).Alpha(alpha)
+		if i == misideLayers-1 && level > 0 {
+			layout := glowLayoutAtFor(ch.text, ch.font, &ch.deep, 3*unit, 5*unit, 24*unit,
+				level, ui.RGB(0, 0, 0).Alpha(.88))
+			d.p.TextLayout(layout, x+off, base+off-asc, ink)
+			continue
+		}
+		d.p.Glyphs(ch.glyphs, x+off, base+off, ink)
 	}
 	d.p.Glyphs(ch.glyphs, x, base, white.Alpha(alpha))
 }

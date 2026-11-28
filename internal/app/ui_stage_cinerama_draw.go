@@ -17,7 +17,7 @@ import (
 // - 组透明度改成把每个色的 alpha 乘下去（文字和光本来就叠在同一处，视觉一致）；缩放用变换绕屏心。
 // - 描边填色的“描边”一侧画成三成透明度的实心字，远看与细描边一致。
 // - 四边的环形文字逐字算圆角矩形上的位置与切线，再逐字旋转贴上去。
-// - 文字辉光用同一组字形向外错位叠画近似原版的 30px 阴影。
+// - 文字辉光交给 MyGo 的真模糊文字阴影，模糊半径按原版 30px（乘屏折算）走。
 const (
 	cinSubtitleGapDp = 14
 	cinSubtitleLines = 1.5
@@ -44,11 +44,16 @@ func (g cinGeometry) clear() float32 { return g.band * cinClearance }
 type cinText struct {
 	glyphs                []ui.Glyph
 	w, h, ascent, descent float32
+	// 辉光只能用排版画（阴影挂在 Span 上），所以留住原文和字体；
+	// 各浓度档的排版存在 glow 里，值拷贝共用同一份缓存。
+	src  string
+	font ui.Font
+	glow *cinGlow
 }
 
 func cinShape(text string, font ui.Font) cinText {
 	m := font.Metrics()
-	t := cinText{ascent: m.Ascent, descent: m.Descent}
+	t := cinText{src: text, font: font, ascent: m.Ascent, descent: m.Descent}
 	t.h = t.ascent + t.descent
 	if text == "" {
 		return t
@@ -464,17 +469,17 @@ func (d cinPaint) drawSmall(art *cinSmallArt, t float64, env cinEnvelope) {
 		if p <= .002 {
 			continue
 		}
-		ink := d.accent.Alpha(p * opacity)
-		d.glowText(*text, art.x[i], art.y[i]+text.h/2, 0, float32(cinGlowRatio)*d.geo.unit*.42, d.accent, p*opacity*.55)
+		cy := art.y[i] + text.h/2
+		alpha := p * opacity
+		ink := d.accent.Alpha(alpha)
 		if p >= .999 && scale >= .999 {
-			d.text(*text, art.x[i], art.y[i]+text.h/2, 0, ink)
+			d.glowText(text, art.x[i], cy, alpha, ink)
 			continue
 		}
-		cy := art.y[i] + text.h/2
 		dy := (1 - p) * (8 + art.jitter[i]*10) / 100 * text.h
 		s := (.94 + .06*p) * scale
 		d.p.Transform(ui.Scaling(s, s), d.x+art.x[i]+text.w/2, d.y+cy+dy, func() {
-			d.text(*text, art.x[i], cy+dy, 0, ink)
+			d.glowText(text, art.x[i], cy+dy, alpha, ink)
 		})
 	}
 }
@@ -591,10 +596,9 @@ func (d cinPaint) drawHero(art *cinHeroArt, t float64, env cinEnvelope) {
 	opacity := float32(env.opacity)
 	if art.poster != nil {
 		for i := range art.poster {
-			text := art.poster[i]
+			text := &art.poster[i]
 			cy := art.posterAt[i*2+1] + text.h/2
-			d.glowText(text, art.posterAt[i*2], cy, 0, float32(cinGlowRatio)*d.geo.unit*.42, d.accent, .5*opacity)
-			d.text(text, art.posterAt[i*2], cy, 0, d.accent.Alpha(opacity))
+			d.glowText(text, art.posterAt[i*2], cy, opacity, d.accent.Alpha(opacity))
 		}
 		return
 	}
@@ -622,40 +626,36 @@ func (d cinPaint) drawHero(art *cinHeroArt, t float64, env cinEnvelope) {
 }
 
 func (d cinPaint) drawChunk(c *cinChunkArt, cx, cy, trackEm, alpha float32, ink ui.Color, fill float32) {
-	glowRadius := float32(cinGlowRatio) * d.geo.unit * .42
 	if len(c.glyphs) > 0 {
 		track := trackEm * c.fontPx
 		left := cx - (c.glyphW+track*float32(len(c.glyphs)-1))/2
 		for i := range c.glyphs {
-			g := c.glyphs[i]
 			x := left + c.glyphX[i] + track*float32(i)
-			d.glowText(g, x, cy, 0, glowRadius, d.accent, alpha*.55)
-			d.text(g, x, cy, 0, ink)
+			d.glowText(&c.glyphs[i], x, cy, alpha, ink)
 		}
 		return
 	}
-	text := c.text
+	text := &c.text
 	track := trackEm * c.fontPx
 	left := cx - text.trackWidth(track)/2
-	d.glowText(text, left, cy, track, glowRadius, d.accent, alpha*.55)
 	if !c.chunk.fill {
-		d.text(text, left, cy, track, ink)
+		d.glowText(text, left, cy, alpha, ink)
 		return
 	}
 	// 描边填色：没扫到的一侧画成三成透明的实心字（细描边的近似），扫到的一侧画实心字。
-	d.text(text, left, cy, track, ink.Alpha(alpha*.32))
+	d.glowText(text, left, cy, alpha*.32, ink.Alpha(alpha*.32))
 	pad := text.h * .3
 	top := cy - text.h/2
 	if c.chunk.fillVertical {
 		split := top + text.h*fill
 		d.p.Clip(ui.Rect{X: d.x + left - pad, Y: d.y + top - pad, W: text.w + 2*pad, H: max(0, split-top+pad)}, 0, func() {
-			d.text(text, left, cy, track, ink)
+			d.glowText(text, left, cy, alpha, ink)
 		})
 		return
 	}
 	split := left + text.w*fill
 	d.p.Clip(ui.Rect{X: d.x + left - pad, Y: d.y + top - pad, W: max(0, split-left+pad), H: text.h + 2*pad}, 0, func() {
-		d.text(text, left, cy, track, ink)
+		d.glowText(text, left, cy, alpha, ink)
 	})
 }
 
@@ -1026,20 +1026,74 @@ func (d cinPaint) text(t cinText, left, cy, track float32, ink ui.Color) {
 	d.p.Glyphs(glyphs, d.x+left, d.y+cy+(t.ascent-t.descent)/2, ink)
 }
 
-// glowText 用同一组字形向外错位叠画，近似原版的同色文字阴影。两圈错位的字叠起来，
-// 边缘比单圈更圆顺（MyGo 没有模糊）。
-func (d cinPaint) glowText(t cinText, left, cy, track, radius float32, ink ui.Color, alpha float32) {
-	if alpha <= .01 || radius <= .2 || len(t.glyphs) == 0 || d.s.preview {
+// glowText 画同色辉光 + 实心字。原版是 CSS text-shadow 0 0 30px；MyGo 的文字阴影
+// 是真模糊，正好对上——阴影用同色、模糊 30（按屏折算），铺在字下，实心字按 ink 的
+// 透明度盖上去。旧写法把整字往外错位叠 16 遍，放大后是一圈硬锯齿，像描边。
+func (d cinPaint) glowText(t *cinText, left, cy, alpha float32, ink ui.Color) {
+	if t == nil || len(t.glyphs) == 0 || ink.A == 0 || alpha <= .01 || d.s.preview {
 		return
 	}
-	const steps = 8
-	for ring, scale := range []float32{.55, 1} {
-		for i := 0; i < steps; i++ {
-			a := float64(i)*2*math.Pi/steps + float64(ring)*math.Pi/steps
-			dx, dy := float32(math.Cos(a))*radius*scale, float32(math.Sin(a))*radius*scale
-			d.text(t, left+dx, cy+dy, track, ink.Alpha(alpha/steps*1.15))
-		}
+	// 原版把阴影浓度量化成档缓存；这里同样按档缓存排版，免得逐帧重新塑形。
+	level := int(math.Round(float64(cinClamp(float64(alpha), 0, 1)) * cinGlowLevels))
+	if level <= 0 {
+		return
 	}
+	layout := t.glowLayout(float32(cinGlowRatio)*d.geo.unit, level, d.accent)
+	_, h := layout.Size()
+	d.p.TextLayout(layout, d.x+left, d.y+cy-h/2, ink)
+}
+
+// cinGlowLevels 是辉光浓度的档数，和原版一样够用就好。
+const cinGlowLevels = 10
+
+// cinGlow 是一段文字各（偏移, 模糊半径, 浓度）档的阴影排版，第一次用到才塑形。
+type cinGlow struct {
+	accent  ui.Color
+	layouts map[[4]int]*ui.TextLayout
+}
+
+// glowLayoutFor 取单元这一档的阴影排版，并把新建的缓存挂回单元的 glow 上复用。
+func glowLayoutFor(src string, font ui.Font, glow **cinGlow, blur float32, level int, accent ui.Color) *ui.TextLayout {
+	return glowLayoutAtFor(src, font, glow, 0, 0, blur, level, accent)
+}
+
+// glowLayoutAtFor 同上，但阴影带偏移。
+func glowLayoutAtFor(src string, font ui.Font, glow **cinGlow, dx, dy, blur float32, level int, color ui.Color) *ui.TextLayout {
+	t := cinText{src: src, font: font, glow: *glow}
+	layout := t.glowLayoutAt(dx, dy, blur, level, color)
+	*glow = t.glow
+	return layout
+}
+
+// glowLayout 取这一档的排版：Span 只带阴影，填充色绘制时再传，
+// 淡入淡出才不会跟着阴影一起被量化。模糊半径按整数像素归档，避免逐帧重新塑形。
+func (t *cinText) glowLayout(blur float32, level int, accent ui.Color) *ui.TextLayout {
+	return t.glowLayoutAt(0, 0, blur, level, accent)
+}
+
+// glowLayoutAt 和 glowLayout 一样，但阴影可以带偏移，供掉落类的深投影用。
+func (t *cinText) glowLayoutAt(dx, dy, blur float32, level int, accent ui.Color) *ui.TextLayout {
+	if t.glow == nil {
+		t.glow = &cinGlow{}
+	}
+	g := t.glow
+	// 换封面会换主色，档位缓存得跟着重建。
+	if g.accent != accent {
+		*g = cinGlow{accent: accent}
+	}
+	if g.layouts == nil {
+		g.layouts = map[[4]int]*ui.TextLayout{}
+	}
+	key := [4]int{int(math.Round(float64(dx))), int(math.Round(float64(dy))),
+		int(math.Round(float64(blur))), level}
+	if layout := g.layouts[key]; layout != nil {
+		return layout
+	}
+	shadow := ui.NewTextShadow(float32(key[0]), float32(key[1]), float32(key[2]),
+		accent.Alpha(float32(level)/cinGlowLevels))
+	layout := ui.ShapeRichText([]ui.Span{{Text: t.src, Shadow: shadow}}, t.font, 0)
+	g.layouts[key] = layout
+	return layout
 }
 
 // lang 是舞台当前的排版语言。

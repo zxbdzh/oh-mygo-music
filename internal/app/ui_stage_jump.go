@@ -17,7 +17,7 @@ import (
 // 小人在柱顶之间跳，踩下去的柱子弹簧似的弹回来，落地踩出椭圆波纹和尘土；镜头跟着时间表走，
 // 跳过的那几段弧线留下渐淡的点迹；译文浮在柱子后面，按俯角压扁、往右上侧倾。
 //
-// 移植取舍：MyGo 没有模糊和混合模式，落地阴影、译文光晕用多层错位和透明渐变近似；
+// 移植取舍：MyGo 没有形状模糊和混合模式，落地阴影用透明渐变近似；译文光晕改用文字阴影；
 // 歇脚柱用“上下椭圆 + 侧壁”画，不再逐段求弧。所有位置都由播放时刻直接算出，不读上一帧，
 // 拖进度条和暂停看到的是同一帧。
 const (
@@ -1974,9 +1974,13 @@ func drawJumpTranslation(c *ui.Context, s stageFrame, course *jumpCourse) {
 				Then(ui.Scaling(scaleX, flatten)).
 				Then(ui.Translation(cx, top+float32(i)*lineHeight))
 			p.Transform(t, 0, 0, func() {
-				// 光晕：MyGo 没有模糊，用几层错位的同色字近似。
-				for _, off := range [][2]float32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}} {
-					p.TextLayout(layout, x+off[0], off[1], ui.Hex("#aab4fa").Alpha(.2))
+				// 原版译文挂三层主题色光晕（半径 0.55/0.26/0.12 字高），MyGo 的文字阴影就是真模糊；
+				// 旧写法用四个错位字近似，远看没有那圈光。
+				font := ui.Font{Size: size, Weight: 500, Lang: c.Locale()}
+				for _, layer := range [3][2]float32{{.55, .112}, {.26, .196}, {.12, .28}} {
+					shadow := ui.NewTextShadow(0, 0, size*layer[0], s.accent.Alpha(layer[1]))
+					glow := ui.ShapeRichText([]ui.Span{{Text: rows[i], Shadow: shadow}}, font, 0)
+					p.TextLayout(glow, x, 0, s.accent.Alpha(layer[1]))
 				}
 				p.TextLayout(layout, x, 0, white.Alpha(.8))
 			})

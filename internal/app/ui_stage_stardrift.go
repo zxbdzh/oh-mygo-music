@@ -318,7 +318,8 @@ type sdPaint struct {
 	area   ui.Rect
 	w, h   float32
 	pulse  float32
-	shapes map[rune]cinText
+	// 指针：辉光排版缓存在 cinText 里，值拷贝会让缓存每帧重建。
+	shapes map[rune]*cinText
 }
 
 // stageSceneStardrift 画星潮·银河。
@@ -327,7 +328,7 @@ func stageSceneStardrift(c *ui.Context, s stageFrame) {
 		return
 	}
 	canvas := stageSceneCanvas(c.Key("sd-screen"))
-	shapes := *ui.Local(canvas, "glyphs", func() map[rune]cinText { return map[rune]cinText{} })
+	shapes := *ui.Local(canvas, "glyphs", func() map[rune]*cinText { return map[rune]*cinText{} })
 	fontPx := min(76, s.w*.066, s.h*.18)
 	textUnit := fontPx / sdBaseFont
 	w, h := s.w, s.h
@@ -341,7 +342,7 @@ func stageSceneStardrift(c *ui.Context, s stageFrame) {
 	}
 	area := ui.Rect{X: mx, Y: my, W: max(1, w-2*mx), H: max(1, h-2*my-max(my, subtitle+half))}
 	if area.W <= 0 || area.H <= 0 {
-		area = ui.Rect{X: w * .1, Y: h * .2, W: max(1, w * .8), H: max(1, h * .6)}
+		area = ui.Rect{X: w * .1, Y: h * .2, W: max(1, w*.8), H: max(1, h*.6)}
 	}
 	still := s.motion == 0
 	pulse := float32(1)
@@ -504,7 +505,7 @@ func (d sdPaint) lyrics(index int, t float32, still bool, avoid []ui.Point) {
 // glyph 画一个字：光罩、辉光、以及字本身。
 func (d sdPaint) glyph(g *sdRune, x, y float32, look sdLook) {
 	shape := d.shape(g.char)
-	if shape.w <= 0 {
+	if shape == nil || shape.w <= 0 {
 		return
 	}
 	ringAlpha := look.ring
@@ -523,18 +524,34 @@ func (d sdPaint) glyph(g *sdRune, x, y float32, look sdLook) {
 	ink := d.accent.Mix(d.text, clamp01(look.primary))
 	alpha := clamp01(look.alpha)
 	if look.glow > .2 && !d.s.preview {
-		// MyGo 没有模糊，用两圈错位的同色字近似原版的文字阴影：内圈亮、外圈淡，合起来边缘更顺。
-		radius := look.glow * d.unit * .35
-		for ring, scale := range []float32{.55, 1} {
-			const steps = 8
-			for i := 0; i < steps; i++ {
-				a := float64(i)*2*math.Pi/steps + float64(ring)*math.Pi/steps
-				dx, dy := radius*scale*float32(math.Cos(a)), radius*scale*float32(math.Sin(a))
-				d.drawShape(shape, x+dx, y+dy, float32(look.scale), ink.Alpha(alpha*.11))
-			}
-		}
+		// 原版每个字挂一张同色 Shadow（CSS blur ≈ 0.35 字高），MyGo 的文字阴影
+		// 就是真模糊，直接照着画；以前用两圈错位字叠，放大后是一圈台阶。
+		d.glowShape(shape, x, y, float32(look.scale), ink.Alpha(alpha), alpha, look.glow*d.unit)
+		return
 	}
-	d.drawShape(shape, x, y, float32(look.scale), ink.Alpha(alpha))
+	d.drawShape(*shape, x, y, float32(look.scale), ink.Alpha(alpha))
+}
+
+// glowShape 画带真模糊阴影的字：阴影挂在文字排版上，实心字随 alpha 一起淡出。
+func (d sdPaint) glowShape(t *cinText, x, y, scale float32, ink ui.Color, alpha, blur float32) {
+	if t == nil || scale <= .01 {
+		return
+	}
+	level := int(math.Round(float64(alpha) * cinGlowLevels))
+	if level <= 0 {
+		return
+	}
+	layout := t.glowLayout(blur, level, d.accent)
+	left := d.x + x - t.w/2
+	_, h := layout.Size()
+	top := d.y + y - h/2
+	if scale == 1 {
+		d.p.TextLayout(layout, left, top, ink)
+		return
+	}
+	d.p.Transform(ui.Scaling(scale, scale), d.x+x, d.y+y, func() {
+		d.p.TextLayout(layout, left, top, ink)
+	})
 }
 
 func (d sdPaint) drawShape(t cinText, x, y, scale float32, ink ui.Color) {
@@ -550,15 +567,15 @@ func (d sdPaint) drawShape(t cinText, x, y, scale float32, ink ui.Color) {
 	})
 }
 
-func (d sdPaint) shape(char string) cinText {
+func (d sdPaint) shape(char string) *cinText {
 	r := []rune(char)
 	if len(r) == 0 {
-		return cinText{}
+		return nil
 	}
 	if t, ok := d.shapes[r[0]]; ok {
 		return t
 	}
 	t := cinShape(char, ui.Font{Size: d.font, Weight: 500, Lang: lyrics.Lang(d.s.lines)})
-	d.shapes[r[0]] = t
-	return t
+	d.shapes[r[0]] = &t
+	return &t
 }

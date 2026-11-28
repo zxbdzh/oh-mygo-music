@@ -114,14 +114,17 @@ func renderStageColorMode(c *ui.Context, s stageFrame) {
 
 type colorStagePiece struct {
 	glyphs      []ui.Glyph
+	text        string  // 单元的原文，辉光排版要用
 	x, y, width float32 // 字形原点、基线及可见单元在该行上的宽度
 	start, end  time.Duration
+	glow        *cinGlow // 唱和时的阴影排版，逐帧复用
 }
 
 type colorStageLayout struct {
 	line           *lyrics.Line
 	pieces         []colorStagePiece
 	font, width, y float32
+	textFont       ui.Font // 塑形字体，辉光排版和基线对齐复用
 }
 
 type colorStageCache struct {
@@ -208,7 +211,7 @@ func (c *colorStageCache) layout(line *lyrics.Line, em float32) *colorStageLayou
 		rows = shape.Lines()
 		_, height = shape.Size()
 	}
-	out.font, out.y = font.Size, center
+	out.font, out.y, out.textFont = font.Size, center, font
 
 	runes := []rune(text)
 	starts, ends := colorStageTimings(line, text, len(runes))
@@ -250,8 +253,10 @@ func (c *colorStageCache) layout(line *lyrics.Line, em float32) *colorStageLayou
 			}
 			if !unicode.IsSpace(runes[start+first]) {
 				w := max(font.Size*.13, glyphs[hi-1].X+glyphs[hi-1].Advance-g.X)
-				out.pieces = append(out.pieces, colorStagePiece{glyphs[lo:hi], (c.w - width) / 2, center - height/2 + row.Baseline, w,
-					starts[start+first], ends[min(end-1, start+last)]})
+				out.pieces = append(out.pieces, colorStagePiece{glyphs: glyphs[lo:hi],
+					text: string(runes[start+first : start+last+1]),
+					x:    (c.w - width) / 2, y: center - height/2 + row.Baseline, width: w,
+					start: starts[start+first], end: ends[min(end-1, start+last)]})
 			}
 			lo = hi
 		}
@@ -314,39 +319,6 @@ func (d colorStagePaint) glyph(g colorStagePiece, dx, dy float32, ink ui.Color) 
 	d.p.Glyphs(g.glyphs, d.x+g.x+dx, d.y+g.y+dy, ink)
 }
 
-// 用同一组字形向四周错位叠画，得到贴着笔画的柔边；径向渐变会在压暗封面上露出圆盘边界。
-func (d colorStagePaint) glyphGlow(g colorStagePiece, dy, size float32, ink ui.Color, strength float32) {
-	if d.light || strength <= 0 {
-		return
-	}
-	// 先扩散后收亮，避免光比字更抢眼；预览和软渲染走少次数的轻量分支。
-	steps, maxRadius := 12, size*.088
-	if d.light {
-		steps, maxRadius = 4, size*.045
-	}
-	radius := maxRadius * min(1, .45+strength)
-	for i := range steps {
-		t := float32(i+1) / float32(steps)
-		angle := float64(i) * (2 * math.Pi / float64(steps))
-		dx, dy2 := float32(math.Cos(angle))*radius*t, float32(math.Sin(angle))*radius*t
-		d.glyph(g, dx, dy+dy2, ink.Alpha(.11*strength*(1-t*.72)))
-	}
-}
-
-// 软渲染下也保留少量贴字形柔边，避免 52Hz 退回成整行外包方框。
-func (d colorStagePaint) glyphGlowSoft(g colorStagePiece, dy, size float32, ink ui.Color, strength float32) {
-	if strength <= 0 {
-		return
-	}
-	radius := size * .045 * min(1, .45+strength)
-	for i := range 4 {
-		t := float32(i+1) / 4
-		angle := float64(i) * (math.Pi / 2)
-		dx, dy2 := float32(math.Cos(angle))*radius*t, float32(math.Sin(angle))*radius*t
-		d.glyph(g, dx, dy+dy2, ink.Alpha(.14*strength*(1-t*.62)))
-	}
-}
-
 func (d colorStagePaint) glow(x, y, radius float32, ink ui.Color, alpha float32) {
 	// Radius 必须写死成半径：默认值只到方框的角，沿中线到框边时还没淡完，会留下一条直边。
 	d.p.FillRadialGradient(ui.Rect{X: x - radius, Y: y - radius, W: radius * 2, H: radius * 2}, ui.RadialGradient{
@@ -407,7 +379,8 @@ func (d colorStagePaint) aurora(l *colorStageLayout) {
 		fade = 1
 	}
 	scale := l.font / 64
-	for _, g := range l.pieces {
+	for i := range l.pieces {
+		g := &l.pieces[i]
 		t := float32(0)
 		if d.s.motion != 0 {
 			t = clamp01(float32(d.s.pos-g.start) / float32(max(1, g.end-g.start)))
@@ -416,7 +389,7 @@ func (d colorStagePaint) aurora(l *colorStageLayout) {
 			t = 1
 		}
 		if t <= 0 {
-			d.glyph(g, 0, 0, white.Alpha(.28*fade))
+			d.glyph(*g, 0, 0, white.Alpha(.28*fade))
 			continue
 		}
 		hue := float32(math.Mod(float64(g.start.Seconds()*70)+float64(t*40), 360))
@@ -424,10 +397,19 @@ func (d colorStagePaint) aurora(l *colorStageLayout) {
 		lift := float32(0)
 		if t < 1 {
 			lift = -2 * scale
-			// 光晕半径照原版 8+14t，按字号折算；MyGo 没有真实模糊，用贴字形叠画近似。
-			d.glyphGlow(g, lift, l.font*(12+18*t)/64, stageHSL(hue, .9, .65), .65)
+			// 原版唱和时挂半径 8+14t 的同色阴影；MyGo 的排版阴影就是真模糊，按同一半径换算。
+			level := int(math.Round(float64(clamp01(.65*fade)) * cinGlowLevels))
+			if level > 0 {
+				// 模糊半径随 t 连续变化，按 6px 归档，避免每个字攒出几十份阴影排版。
+				blur := 6 * float32(math.Round(float64(2*(.57735*(8+14*t)*scale+.5))/6))
+				layout := glowLayoutFor(g.text, l.textFont, &g.glow, blur, level, stageHSL(hue, .9, .65))
+				asc := l.textFont.Metrics().Ascent
+				// 单元排版从 0 起排，要加上它在整行里的字形偏移。
+				d.p.TextLayout(layout, d.x+g.x+g.glyphs[0].X, d.y+g.y+lift-asc, ink.Alpha(fade))
+				continue
+			}
 		}
-		d.glyph(g, 0, lift, ink.Alpha(fade))
+		d.glyph(*g, 0, lift, ink.Alpha(fade))
 	}
 }
 

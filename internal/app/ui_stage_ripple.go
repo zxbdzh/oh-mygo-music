@@ -250,7 +250,11 @@ func (d colorStagePaint) rippleTokens(l *colorStageLayout, pal wavePalette, elap
 	}
 	mid := float32(n-1) / 2
 	motion := d.s.motion
-	for i, g := range l.pieces {
+	// 原版正文一直挂着主色阴影：σ = max(10px, 屏高 3%)/2，偏移向下 1px。
+	blur := max(10, d.s.h*.03)
+	asc := l.textFont.Metrics().Ascent
+	for i := range l.pieces {
+		g := &l.pieces[i]
 		dist := absStageFloat(float32(i) - mid)
 		side := float32(1)
 		if float32(i) < mid {
@@ -258,9 +262,16 @@ func (d colorStagePaint) rippleTokens(l *colorStageLayout, pal wavePalette, elap
 		}
 		p := rippleEase(clamp01((elapsed - (100 + dist*waveTokenDelay)) / waveTokenEnter))
 		dx := side * min(dist, 4) * .7 * l.font * (1 - p) * motion
-		if p > 0 {
-			d.glyph(g, dx, 0, pal.tint.Alpha(.97*p))
+		if p <= 0 {
+			continue
 		}
+		level := int(math.Round(float64(clamp01(.5*p)) * cinGlowLevels))
+		if level > 0 && len(g.glyphs) > 0 {
+			layout := glowLayoutFor(g.text, l.textFont, &g.glow, blur, level, pal.keyword)
+			d.p.TextLayout(layout, d.x+g.x+dx+g.glyphs[0].X, d.y+g.y-asc, pal.tint.Alpha(.97*p))
+			continue
+		}
+		d.glyph(*g, dx, 0, pal.tint.Alpha(.97*p))
 	}
 }
 
