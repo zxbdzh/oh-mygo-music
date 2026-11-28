@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/shader"
 
 	"mygo-music/internal/lyrics"
 )
@@ -28,11 +29,16 @@ func renderStageColorMode(c *ui.Context, s stageFrame) {
 	}
 	em := min(76, s.w*0.066, s.h*0.18)
 	current := min(s.current, len(s.lines)-1)
+	if s.style == "52hz" {
+		current = ringsLineAt(s.lines, s.pos)
+	}
 	var line *lyrics.Line
 	var layout *colorStageLayout
 	if current >= 0 {
 		line = &s.lines[current]
-		layout = cache.layout(line, em)
+		if s.style != "52hz" {
+			layout = cache.layout(line, em)
+		}
 	}
 	// 动感波光在句间、空行保持上一句（原模组的 WaveHold），不要闪成一片空背景。
 	if s.style == "ripple" && line != nil && strings.TrimSpace(line.Text) == "" {
@@ -45,8 +51,8 @@ func renderStageColorMode(c *ui.Context, s stageFrame) {
 	}
 	var old [2]*colorStageLayout
 	var oldEnd [2]time.Duration
-	// 虹光和 52Hz 也需要上一句做短暂淡出，否则换句时整行突然消失，看起来像闪切。
-	if s.style == "miside" || s.style == "52hz" {
+	// 掉落的字在下一句出现后还会留一段时间。
+	if s.style == "miside" {
 		for i := range old {
 			if n := current - i - 1; n >= 0 {
 				previous := &s.lines[n]
@@ -80,21 +86,18 @@ func renderStageColorMode(c *ui.Context, s stageFrame) {
 		case "rainbow":
 			paint.aurora(layout)
 		case "52hz":
-			var ringsL, prevRings *ringsLayout
-			if line != nil {
-				ringsL = cache.ringsLayoutFor(line, em)
-			}
-			if old[0] != nil {
-				prevRings = cache.ringsLayoutFor(old[0].line, em)
-			}
-			paint.drawRings(ringsL, prevRings)
+			paint.drawRings(cache)
 		case "miside":
 			paint.miside(misideL, misideOld, misideEnds)
 		case "ripple":
 			paint.ripple(layout)
 		}
 	})
-	if layout == nil || len(layout.pieces) == 0 {
+	// 52Hz 用自己的字形布局；前奏、间奏和尾奏的髓心没有副行。
+	if s.style == "52hz" && line == nil {
+		return
+	}
+	if s.style != "52hz" && (layout == nil || len(layout.pieces) == 0) {
 		ui.Column(c.Key("color-stage-intro")).Absolute().Top(0).Bottom(0).Left(0).Right(0).Center().PassThrough().Children(func() {
 			mark := "·  ·  ·"
 			if len(s.lines) == 0 {
@@ -134,6 +137,7 @@ type colorStageCache struct {
 	layouts     [4]*colorStageLayout
 	rings       [4]*ringsLayout
 	ringsNext   int
+	ringsValues *shader.Values
 	miside      [4]*misideLayout
 	misideNext  int
 }
@@ -185,8 +189,6 @@ func (c *colorStageCache) layout(line *lyrics.Line, em float32) *colorStageLayou
 	case "rainbow":
 		// 虹光照 Aurora：Medium 字重、1.35 行高、左右各留 8%。
 		font.Weight, font.LineHeight, maxWidth = 500, 1.35, c.w*.84
-	case "52hz":
-		font.Size, font.Weight, maxWidth = em*.82, 740, c.w*.72
 	case "miside":
 		font.Weight, center = 830, c.h*.42
 	case "ripple":

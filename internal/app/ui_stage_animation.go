@@ -19,6 +19,7 @@ type stageFrame struct {
 	w, h, motion                        float32
 	accent                              ui.Color
 	levels                              [player.Bands]float32
+	ringEnergy                          float32 // 0 表示此处没有本地频谱
 	hasLevels, sparks, preview, playing bool
 	art                                 *artwork
 	trackKey, rushBackground            string
@@ -48,6 +49,11 @@ func (a *app) newStage(c *ui.Context, tr *music.Track, lines []lyrics.Line, art 
 		motion: a.stageMotion(c), accent: accent, levels: levels, hasLevels: hasLevels, sparks: a.settings.StageSparks,
 		playing: a.pl.Playing(), art: art, trackKey: a.lyricKey(tr), rushBackground: a.settings.StageAnimation.RushBackground,
 		rushRhythm: a.settings.StageAnimation.RushRhythm, title: tr.Name, artist: tr.ArtistNames()}
+	if style == "52hz" && frame.motion != 0 {
+		if energy, ok := a.pl.StageRingEnergy(pos); ok {
+			frame.ringEnergy = energy
+		}
+	}
 	// 间奏里热评升上来时，律动画面淡出，和歌词页一致（ui_quiet.go）。
 	dim, _ := a.quietShown(c, stage, tr, lines, true)
 	stage.Children(func() {

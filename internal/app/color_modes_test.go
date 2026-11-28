@@ -63,6 +63,46 @@ func TestStageColorSeekFrame(t *testing.T) {
 	}
 }
 
+// 52Hz 换句时两套年轮共存，长间奏保留髓心并且倒拖可以还原同一帧。
+func TestRingsSourceTransition(t *testing.T) {
+	lines := []lyrics.Line{
+		{At: time.Second, End: 3500 * time.Millisecond, Text: "晚风 Crossing"},
+		{At: 3500 * time.Millisecond, End: 6 * time.Second, Text: "星光 Starlight"},
+	}
+	s := stageFrame{style: "52hz", lines: lines, current: 1, pos: 4700 * time.Millisecond,
+		w: 240, h: 140, motion: 1, playing: true, ringEnergy: .75}
+	tt := colorModeTestCanvas(&s)
+	atLine := slices.Clone(tt.Image().Pix)
+	s.playing = false
+	tt.Advance(time.Second)
+	tt.Frame()
+	if !bytes.Equal(atLine, tt.Image().Pix) {
+		t.Fatal("暂停时同一响度和播放位置画面发生变化")
+	}
+	s.ringEnergy = .15
+	tt.Frame()
+	if bytes.Equal(atLine, tt.Image().Pix) {
+		t.Fatal("年轮没有响应响度变化")
+	}
+	s.playing = true
+	s.pos = 7 * time.Second
+	tt.Frame()
+	interlude := slices.Clone(tt.Image().Pix)
+	if bytes.Equal(atLine, interlude) {
+		t.Fatal("进入间奏后仍显示原歌词帧")
+	}
+	s.pos = 12 * time.Second
+	tt.Frame()
+	if bytes.Equal(interlude, tt.Image().Pix) {
+		t.Fatal("间奏髓心没有推进")
+	}
+	s.pos, s.ringEnergy = 4700*time.Millisecond, .75
+	tt.Frame()
+	if !bytes.Equal(atLine, tt.Image().Pix) {
+		t.Fatal("从间奏倒拖后没有还原换句年轮")
+	}
+}
+
 // 保存逐字、落地和窄预览的关键帧，供无头目视验收。
 func TestStageColorFrames(t *testing.T) {
 	dir := framesDir(t)

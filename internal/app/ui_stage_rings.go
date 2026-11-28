@@ -1,11 +1,11 @@
 package app
 
 import (
-	"hash/fnv"
 	"math"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf16"
 
 	"github.com/egoist/mygo/ui"
 
@@ -14,22 +14,22 @@ import (
 
 // 52Hz 照 myMusic 的 Rings52HzLayout / Rings52HzVisualizer 移植：
 // 整句居中，每个字按句子的种子错位、旋转、缩放；唱到的字点亮并鼓起 12%；
-// 每 0.72 秒从一个外扩的字身轮廓发出一圈年轮，年轮在歌曲时间上往外走、到屏幕边缘前淡没。
+// 年轮从字身联合轮廓或间奏髓心往外走，源的形状随年轮保留到淡没。
 
 const (
-	ringsLineHeight = 1.34  // 行距倍数（原版 LINE_HEIGHT）
-	ringsGap        = 0.55  // 年轮离字身的间距（原版 RING_GAP）
-	ringsCorner     = 0.14  // 圆角（原版 RING_CORNER）
-	ringsBeat       = 0.72  // 没有真实拍点时的拍间隔（原版 STATIC_BEAT_S）
-	ringsLightMin   = 0.12  // 点亮用时下限（秒）
-	ringsLightMax   = 0.45  // 点亮用时上限（秒）
-	ringsSwell      = 0.12  // 点亮时鼓起幅度
-	ringsDim        = 0.3   // 没唱到的字的透明度
-	ringsLineFade   = 0.45  // 整句淡入淡出（秒）
-	ringsOpacity    = 0.8   // 年轮浓度
-	ringsWideHalf   = 0.42  // 宽字的字身半高（按字号）
-	ringsLatinHalf  = 0.38  // 拉丁字的字身半高
-	ringsGlowRadius = 0.39  // 点亮字的阴影半径（按字号，原版 Shadow 的 blurRadius）
+	ringsLineHeight = 1.34 // 行距倍数（原版 LINE_HEIGHT）
+	ringsGap        = 0.55 // 年轮离字身的间距（原版 RING_GAP）
+	ringsCorner     = 0.14 // 圆角（原版 RING_CORNER）
+	ringsBeat       = 0.72 // 没有真实拍点时的拍间隔（原版 STATIC_BEAT_S）
+	ringsLightMin   = 0.12 // 点亮用时下限（秒）
+	ringsLightMax   = 0.45 // 点亮用时上限（秒）
+	ringsSwell      = 0.12 // 点亮时鼓起幅度
+	ringsDim        = 0.3  // 没唱到的字的透明度
+	ringsLineFade   = 0.45 // 整句淡入淡出（秒）
+	ringsOpacity    = 0.8  // 年轮浓度
+	ringsWideHalf   = 0.42 // 宽字的字身半高（按字号）
+	ringsLatinHalf  = 0.38 // 拉丁字的字身半高
+	ringsGlowRadius = 0.39 // 点亮字的阴影半径（按字号，原版 Shadow 的 blurRadius）
 )
 
 type ringsGlyph struct {
@@ -47,14 +47,13 @@ type ringsGlyph struct {
 
 type ringsRect struct {
 	cx, cy, hw, hh float32
-	row           int
+	row            int
 }
 
 type ringsLayout struct {
 	line   *lyrics.Line
 	glyphs []ringsGlyph
-	fine   []ringsRect // 宽字一字一个，拉丁字母按词合成一个
-	coarse []ringsRect // 每行合并到不超过 6 个，远处用
+	shape  ringsShape // 宽字一字一框、拉丁词合成一框，着色时取联合轮廓
 	size   float32
 	font   ui.Font // 塑形字体，辉光排版复用
 	// 辉光排版按行盒居中；字身用同一组度量对齐，避免亮字和暗字错半像素。
@@ -72,54 +71,51 @@ func ringsWide(r rune) bool {
 func buildRingsLayout(line *lyrics.Line, em, w, h float32, lang string) *ringsLayout {
 	out := &ringsLayout{line: line, at: line.At, end: colorStageEnd(line)}
 	text := strings.TrimSpace(line.Text)
-	if text == "" {
+	if text == "" || em <= 0 {
 		return out
 	}
 	chars := []rune(text)
 	maxWidth := w * .78
 	size := em
 	var rows [][]int
-	for attempt := 0; attempt < 6; attempt++ {
-		font := ui.Font{Size: size, Weight: 700, Lang: lang, LineHeight: ringsLineHeight}
-		widths := make([]float32, len(chars))
-		for i, r := range chars {
-			if g := ui.Shape(string(r), font); len(g) > 0 {
-				widths[i] = g[len(g)-1].X + g[len(g)-1].Advance
+	baseWidths := make([]float32, len(chars))
+	font := ui.Font{Size: em, Weight: 500, Lang: lang}
+	for i, r := range chars {
+		g := ui.Shape(string(r), font)
+		baseWidths[i] = em * .28
+		if len(g) > 0 {
+			if advance := g[len(g)-1].X + g[len(g)-1].Advance; advance > 0 {
+				baseWidths[i] = advance
 			}
 		}
+	}
+	widths := make([]float32, len(chars))
+	for attempt := 0; attempt < 6; attempt++ {
+		for i, width := range baseWidths {
+			widths[i] = width * (size / em)
+		}
 		rows = ringsWrap(chars, widths, maxWidth)
-		if len(rows) <= 3 {
+		if len(rows) <= 3 || attempt == 5 {
 			break
 		}
 		size *= .88
 	}
 	out.size = size
-	font := ui.Font{Size: size, Weight: 700, Lang: lang, LineHeight: ringsLineHeight}
+	font.Size, font.LineHeight = size, ringsLineHeight
 	m := font.Metrics()
 	out.font, out.ascent, out.descent = font, m.Ascent, m.Descent
 	starts, ends := colorStageTimings(line, text, len(chars))
 
-	hash := fnv.New32a()
-	hash.Write([]byte(text))
-	sequence := 0
-	between := func(a, b float32) float32 {
-		sequence++
-		return a + (b-a)*lineRandom(float64(hash.Sum32()), float64(sequence))
-	}
+	random := ringsSeed(text)
+	between := func(a, b float32) float32 { return a + (b-a)*random.next() }
 	step := size * ringsLineHeight
 	top := h*.47 - step*float32(len(rows)-1)/2
 	wordID := -1
 	for ri, row := range rows {
 		// 先算这一行的步进：相邻宽字多留 0.06 字高，拉丁词内只留 0.02。
 		advance := make([]float32, len(row))
-		raw := make([]float32, len(row))
 		for i, ci := range row {
-			g := ui.Shape(string(chars[ci]), font)
-			var width float32
-			if len(g) > 0 {
-				width = g[len(g)-1].X + g[len(g)-1].Advance
-			}
-			raw[i] = width
+			width := widths[ci]
 			gap := float32(0)
 			if i+1 < len(row) {
 				nextWide := ringsWide(chars[row[i+1]])
@@ -159,7 +155,7 @@ func buildRingsLayout(line *lyrics.Line, em, w, h float32, lang string) *ringsLa
 					jitter = 1
 				}
 				// 字心按原始步进算，不扣那 0.02 字高；词间距只影响落笔位置。
-				x := cursor + raw[i]/2 + between(-.035, .035)*size*jitter
+				x := cursor + widths[ci]/2 + between(-.035, .035)*size*jitter
 				y := rowY + (wordOffset[0]+between(-.11, .11)*jitter)*size
 				rotation := wordOffset[1] + between(-.075, .075)*jitter
 				wordScale := float32(1)
@@ -173,7 +169,7 @@ func buildRingsLayout(line *lyrics.Line, em, w, h float32, lang string) *ringsLa
 				}
 				out.glyphs = append(out.glyphs, ringsGlyph{
 					glyphs: ui.Shape(string(ch), font), text: string(ch), x: x, y: y,
-					rotation: rotation * 180 / math.Pi, scale: scale, width: raw[i],
+					rotation: rotation * 180 / math.Pi, scale: scale, width: widths[ci],
 					wide: wide, row: ri, word: word,
 					start: starts[ci], end: ends[ci],
 				})
@@ -181,9 +177,9 @@ func buildRingsLayout(line *lyrics.Line, em, w, h float32, lang string) *ringsLa
 			cursor += advance[i]
 		}
 	}
-	out.fine = ringsRects(out)
-	// 每行合成一个外接矩形：MyGo 画不了并集轮廓，按行合并后一圈才像完整的一圈。
-	out.coarse = ringsMerge(out.fine, 1)
+	rects := ringsRects(out)
+	out.shape = ringsShape{fine: ringsMerge(rects, 24), coarse: ringsMerge(rects, 3),
+		gap: ringsGap * size, corner: ringsCorner * size}
 	return out
 }
 
@@ -191,11 +187,10 @@ func buildRingsLayout(line *lyrics.Line, em, w, h float32, lang string) *ringsLa
 func ringsWrap(chars []rune, widths []float32, maxWidth float32) [][]int {
 	var tokens [][]int
 	var current []int
-	var currentWidth float32
 	flush := func() {
 		if len(current) > 0 {
 			tokens = append(tokens, current)
-			current, currentWidth = nil, 0
+			current = nil
 		}
 	}
 	for i, r := range chars {
@@ -205,7 +200,6 @@ func ringsWrap(chars []rune, widths []float32, maxWidth float32) [][]int {
 			continue
 		}
 		current = append(current, i)
-		currentWidth += widths[i]
 		if unicode.IsSpace(r) {
 			flush()
 		}
@@ -213,31 +207,68 @@ func ringsWrap(chars []rune, widths []float32, maxWidth float32) [][]int {
 	flush()
 	var rows [][]int
 	var row []int
-	var rowWidth float32
-	for _, t := range tokens {
-		var tokenWidth float32
-		for _, i := range t {
+	var rowWidth, rowTrailing float32
+	for _, token := range tokens {
+		var tokenWidth, tokenTrailing float32
+		for _, i := range token {
 			tokenWidth += widths[i]
-		}
-		if len(row) > 0 && rowWidth+tokenWidth > maxWidth {
-			rows = append(rows, row)
-			trimmed := t
-			if len(trimmed) > 0 && unicode.IsSpace(chars[trimmed[0]]) {
-				trimmed = trimmed[1:]
+			if unicode.IsSpace(chars[i]) {
+				tokenTrailing += widths[i]
+			} else {
+				tokenTrailing = 0
 			}
-			row, rowWidth = append([]int(nil), trimmed...), tokenWidth
-			continue
 		}
-		row = append(row, t...)
+		trailing := tokenTrailing
+		if tokenWidth == tokenTrailing {
+			trailing += rowTrailing
+		}
+		if len(row) != 0 && rowWidth+tokenWidth-trailing > maxWidth {
+			rows = append(rows, ringsTrimRow(row, chars))
+			row, rowWidth, rowTrailing = nil, 0, 0
+			if unicode.IsSpace(chars[token[0]]) {
+				tokenWidth -= widths[token[0]]
+				tokenTrailing = 0
+				token = token[1:]
+			}
+		}
+		row = append(row, token...)
 		rowWidth += tokenWidth
+		if tokenWidth == tokenTrailing {
+			rowTrailing += tokenTrailing
+		} else {
+			rowTrailing = tokenTrailing
+		}
 	}
 	if len(row) > 0 {
-		rows = append(rows, row)
-	}
-	if len(rows) == 0 {
-		rows = append(rows, nil)
+		rows = append(rows, ringsTrimRow(row, chars))
 	}
 	return rows
+}
+
+func ringsTrimRow(row []int, chars []rune) []int {
+	for len(row) > 0 && unicode.IsSpace(chars[row[len(row)-1]]) {
+		row = row[:len(row)-1]
+	}
+	return row
+}
+
+// 原版按 UTF-16 单元做 FNV-1a，再用 Mulberry32；按 UTF-8 哈希会让汉字错位不同。
+func ringsSeed(text string) ringsRandom {
+	var h uint32 = 0x811c9dc5
+	for _, r := range utf16.Encode([]rune(text)) {
+		h = (h ^ uint32(r)) * 0x01000193
+	}
+	return ringsRandom(h)
+}
+
+type ringsRandom uint32
+
+func (r *ringsRandom) next() float32 {
+	*r += 0x6d2b79f5
+	t := uint32(*r)
+	t = (t ^ (t >> 15)) * (t | 1)
+	t ^= t + (t^(t>>7))*(t|61)
+	return float32((t^(t>>14))>>8) / (1 << 24)
 }
 
 // ringsRects 把字变成年轮源：宽字一字一个，拉丁字母按词合成一个外接矩形。
@@ -279,6 +310,15 @@ func ringsMerge(rects []ringsRect, cap int) []ringsRect {
 		}
 		byRow[r.row] = append(byRow[r.row], r)
 	}
+	// 极窄窗口里缩到最小仍可能超过三行；粗轮廓再按相邻行分组，守住着色器的元素预算。
+	if len(rows) > cap {
+		var out []ringsRect
+		stride := (len(rects) + cap - 1) / cap
+		for i := 0; i < len(rects); i += stride {
+			out = append(out, ringsBounds(rects[i:min(len(rects), i+stride)]))
+		}
+		return out
+	}
 	group := 2
 	for group < len(rects) {
 		total := 0
@@ -295,16 +335,21 @@ func ringsMerge(rects []ringsRect, cap int) []ringsRect {
 		list := byRow[row]
 		for i := 0; i < len(list); i += group {
 			end := min(len(list), i+group)
-			left, right := list[i].cx-list[i].hw, list[i].cx+list[i].hw
-			top, bottom := list[i].cy-list[i].hh, list[i].cy+list[i].hh
-			for _, r := range list[i+1 : end] {
-				left, right = min(left, r.cx-r.hw), max(right, r.cx+r.hw)
-				top, bottom = min(top, r.cy-r.hh), max(bottom, r.cy+r.hh)
-			}
-			out = append(out, ringsRect{cx: (left + right) / 2, cy: (top + bottom) / 2, hw: (right - left) / 2, hh: (bottom - top) / 2, row: row})
+			out = append(out, ringsBounds(list[i:end]))
 		}
 	}
 	return out
+}
+
+func ringsBounds(rects []ringsRect) ringsRect {
+	first := rects[0]
+	left, right := first.cx-first.hw, first.cx+first.hw
+	top, bottom := first.cy-first.hh, first.cy+first.hh
+	for _, r := range rects[1:] {
+		left, right = min(left, r.cx-r.hw), max(right, r.cx+r.hw)
+		top, bottom = min(top, r.cy-r.hh), max(bottom, r.cy+r.hh)
+	}
+	return ringsRect{cx: (left + right) / 2, cy: (top + bottom) / 2, hw: (right - left) / 2, hh: (bottom - top) / 2, row: first.row}
 }
 
 // ringsLightProgress 是字的点亮进度：用时取字长，夹在 0.12–0.45 秒。
@@ -357,73 +402,25 @@ func (d colorStagePaint) drawRingsGlyphs(l *ringsLayout, alpha float32) {
 	}
 }
 
-// drawRings 按歌曲时间画年轮：每 0.72 秒一圈，从字身外扩 0.55 个字高开始往外走。
-func (d colorStagePaint) drawRings(l *ringsLayout, prev *ringsLayout) {
-	s := d.s
-	if l == nil {
+// drawRings 按歌曲时间先画年轮，再叠上正在淡出的旧句和当前句。
+func (d colorStagePaint) drawRings(cache *colorStageCache) {
+	sources, current, previous := d.ringsSources(cache)
+	d.paintRings(cache, sources)
+	if current == nil && previous == nil {
 		return
 	}
 	fade := float32(1)
-	if s.motion != 0 {
-		fade = clamp01(float32((s.pos - l.at).Seconds()) / ringsLineFade)
-	}
-	// 上一句淡出，别在换句时整行突然消失。
-	if prev != nil && s.motion != 0 {
-		out := 1 - clamp01(float32((s.pos-prev.end).Seconds())/ringsLineFade)
-		d.drawRingsGlyphs(prev, out*(1-fade))
-	}
-
-	halfDiagonal := float32(math.Hypot(float64(s.w), float64(s.h))) / 2
-	speed := halfDiagonal / 10
-	energy := float32(0.5)
-	if s.hasLevels && len(s.levels) > 0 {
-		var bass float32
-		for i := 0; i < len(s.levels)/3; i++ {
-			bass = max(bass, clamp01(s.levels[i]))
+	if d.s.motion != 0 {
+		if current != nil {
+			fade = clamp01(float32((d.s.pos - current.at).Seconds()) / ringsLineFade)
 		}
-		energy = .5 + .5*bass
-	}
-	// 年轮只取当前句开始之后、最近 6 拍的那些：更早的属于上一句，形状已经换人了。
-	now := max(0, s.pos.Seconds())
-	if s.motion == 0 {
-		// 减少动效时整页静止：年轮停在换句那一刻，不随播放时间往外走。
-		now = max(0, l.at.Seconds())
-	}
-	births := int(now / ringsBeat)
-	oldest := max(0, int(float64(l.at.Seconds())/ringsBeat))
-	for k := births; k >= 0 && k > births-6 && k >= oldest; k-- {
-		birth := float64(k) * ringsBeat
-		radius := float32((now - birth) * float64(speed))
-		if radius > halfDiagonal {
-			break
-		}
-		// MyGo 没有路径并集，按行合并的矩形看起来才像一圈完整轮廓；逐字矩形会叠成一堆药丸。
-		elements := l.coarse
-		strength := (0.25 + 0.75*energy) * powRings(1-radius/halfDiagonal, 1.8)
-		alpha := (1 - float32(math.Exp(-1.6*float64(strength)))) * ringsOpacity
-		if alpha < .004 {
-			continue
-		}
-		ink := s.accent
-		if ink.A == 0 {
-			ink = ui.RGB(101, 186, 255)
-		}
-		ink = ink.Mix(white, clamp01(radius/halfDiagonal*1.6))
-		width := max(1, 2*(0.5+1.9*powRings(energy, 1.5)))
-		inflate := ringsGap*l.size + radius
-		for _, r := range elements {
-			rect := ui.Rect{X: r.cx - r.hw - inflate, Y: r.cy - r.hh - inflate, W: (r.hw + inflate) * 2, H: (r.hh + inflate) * 2}
-			corner := min(ringsCorner*l.size+inflate, min(rect.W, rect.H)/2)
-			d.p.Stroke(rect, ink.Alpha(alpha), corner, width)
+		if previous != nil {
+			hide := previous.end
+			if current != nil {
+				hide = min(hide, current.at)
+			}
+			d.drawRingsGlyphs(previous, 1-clamp01(float32((d.s.pos-hide).Seconds())/ringsLineFade))
 		}
 	}
-	// 字压在年轮上面，和 myMusic 一样年轮只当背景。
-	d.drawRingsGlyphs(l, fade)
-}
-
-func powRings(v, p float32) float32 {
-	if v <= 0 {
-		return 0
-	}
-	return float32(math.Pow(float64(v), float64(p)))
+	d.drawRingsGlyphs(current, fade)
 }
