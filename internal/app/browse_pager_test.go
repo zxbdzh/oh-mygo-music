@@ -19,6 +19,21 @@ func pagerCards(ids ...string) []music.Station {
 	return cards
 }
 
+// 首帧窄于侧栏时，多页卡片曾因拖动范围为负而让窗口崩溃。
+func TestPagerRendersInNarrowFirstFrame(t *testing.T) {
+	a := newTestApp()
+	without(a, "isLiked")
+	a.home = &music.Browse{Sections: []music.Section{{
+		Title: "Explore", Pager: true,
+		Stations: pagerCards("Card 1", "Card 2", "Card 3", "Card 4", "Card 5", "Card 6"),
+	}}}
+	tt := ui.NewTester(a.view, 64, 600)
+	tt.Frame()
+	if ps := a.library.homePagers[0]; ps == nil || ps.count() != 6 {
+		t.Fatal("the narrow frame did not render the home pager")
+	}
+}
+
 // A pager shows a page of its cards at a time: the arrows and Left and Right
 // turn them, and its last page asks for the batch after it, which the pages go
 // on with.

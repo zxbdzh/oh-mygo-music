@@ -102,9 +102,11 @@ func pagerSnap(width float32, pages int) func(ui.Point) ui.Point {
 
 // pageWidth is how wide a pager's page is: the row's cards across, from edge to
 // edge of the page.
+// pageWidth 在窗口刚创建、尺寸还没测出来时会是负数；取正值，
+// 否则分页器的可拖动范围会得到负宽度而 panic。
 func (a *app) pageWidth(c *ui.Context) float32 {
 	w, _ := c.Size()
-	return w - sidebarWidth - 2*pagePad
+	return max(1, w-sidebarWidth-2*pagePad)
 }
 
 // pagerStores is where a page's pagers keep their places, made as it shows.
