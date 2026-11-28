@@ -3,14 +3,17 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"mygo-music/internal/ai"
@@ -910,5 +913,91 @@ func TestLowConfidenceHidesBarWithEvidence(t *testing.T) {
 	until(t, ch, func() bool { return len(a.backgroundTasks) == 0 })
 	if a.aiBar.open {
 		t.Fatal("low-confidence bar stayed open")
+	}
+}
+
+// 手动与自动建议各用各的样本数，并在重启后保留；显式设成 0 不能退回默认值。
+func TestAISamplePreferences(t *testing.T) {
+	userDataPath, err := mygo.App.Path(mygo.PathUserData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	mygo.App.SetPath(mygo.PathUserData, dir)
+	t.Cleanup(func() { mygo.App.SetPath(mygo.PathUserData, userDataPath) })
+	path, err := settingsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loaded := loadSettings()
+	if loaded.AIManualSamples != 100 || loaded.AIAutoSamples != 0 {
+		t.Fatalf("defaults = %d / %d", loaded.AIManualSamples, loaded.AIAutoSamples)
+	}
+	preferences := defaultSettings()
+	preferences.AIManualSamples, preferences.AIAutoSamples, preferences.path = 0, 30, path
+	if err := preferences.save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded = loadSettings()
+	if loaded.AIManualSamples != 0 || loaded.AIAutoSamples != 30 {
+		t.Fatalf("restored samples %d / %d", loaded.AIManualSamples, loaded.AIAutoSamples)
+	}
+	// 旧配置没有这两个字段，应拿到默认值而不是 0。
+	if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded = loadSettings()
+	if loaded.AIManualSamples != 100 || loaded.AIAutoSamples != 0 {
+		t.Fatalf("legacy settings lost the sample defaults: %d / %d", loaded.AIManualSamples, loaded.AIAutoSamples)
+	}
+}
+
+// 手动建议按手动样本数给模型看歌，喜欢后的建议按自动样本数。
+func TestAISampleCountsReachTheModel(t *testing.T) {
+	bodies := make(chan string, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies <- string(body)
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"content": `{"playlist_id":"10","confidence":0.9,"reason":"适合通勤"}`,
+			}}},
+		})
+	}))
+	defer srv.Close()
+
+	a := newTestApp()
+	a.settings.AIEnabled = true
+	a.settings.AIBaseURL = srv.URL
+	a.settings.AIModel = "m"
+	a.settings.AIManualSamples, a.settings.AIAutoSamples = 2, 1
+	a.mine = []music.Playlist{{ID: "10", Name: "通勤", Mine: true}}
+	tr := song("1", "夜曲", "周杰伦")
+	a.playlists["42"] = &music.Playlist{ID: "42", Name: "List", Tracks: []music.Track{tr}}
+	a.route = route{page: pagePlaylist, src: "fake", id: "42"}
+	f := fake(a)
+	f.playlist = func(id string) (*music.Playlist, error) {
+		return &music.Playlist{ID: id, Tracks: []music.Track{
+			song("s1", "第一首"), song("s2", "第二首"), song("s3", "第三首"),
+		}}, nil
+	}
+
+	ch := posts(a)
+	a.openAISuggestion(&tr)
+	until(t, ch, func() bool { return !a.aiSuggestion.busy })
+	manual := <-bodies
+	if !strings.Contains(manual, "第一首") || !strings.Contains(manual, "第二首") || strings.Contains(manual, "第三首") {
+		t.Fatalf("manual samples = %q", manual)
+	}
+
+	a.pl.Cue([]music.Track{tr})
+	a.account = &music.Account{ID: "1"}
+	f.like = func(id string, on bool) error { return nil }
+	a.likeCurrent()
+	until(t, ch, func() bool { return a.aiBar.open })
+	auto := <-bodies
+	if !strings.Contains(auto, "第一首") || strings.Contains(auto, "第二首") {
+		t.Fatalf("auto samples = %q", auto)
 	}
 }

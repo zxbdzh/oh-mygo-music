@@ -154,7 +154,7 @@ func (a *app) openAISuggestion(tr *music.Track) {
 			}
 			a.redraw()
 		})
-		candidates := a.aiCandidates(lib, tr, 100)
+		candidates := a.aiCandidates(lib, tr, aiSampleCount(a.settings.AIManualSamples))
 		if len(candidates) == 0 {
 			a.post(func() { a.finishAISuggestion(tr.ID, ai.Suggestion{}, "", false) })
 			return
@@ -445,6 +445,13 @@ func (a *app) aiSettings(c *ui.Context, p palette, s *settings, row settingsRow,
 				a.changed()
 			}
 		})
+		// 手动和自动分开设置：手动请求值得多带样本，喜欢后的后台判断默认轻量。
+		row(T("Sample Songs"), T("How many songs of each playlist the model may see when you ask for a suggestion. More songs give better picks and use more tokens."), func() {
+			a.intSettingSlider(c, "ai-manual-samples", T("Sample Songs"), &s.AIManualSamples, 0, 100, 10)
+		})
+		row(T("Sample Songs After Like"), T("How many songs of each playlist the automatic suggestion may see after a like. Keeping it low keeps likes fast and cheap."), func() {
+			a.intSettingSlider(c, "ai-auto-samples", T("Sample Songs After Like"), &s.AIAutoSamples, 0, 100, 10)
+		})
 	})
 	a.aiPreferencesSettings(c, p, block)
 }
@@ -662,7 +669,7 @@ func (a *app) autoSuggestPlaylist(lib *library, tr music.Track) {
 	a.redraw()
 	go func() {
 		defer cancel()
-		candidates := a.aiCandidates(lib, &tr, 0)
+		candidates := a.aiCandidates(lib, &tr, aiSampleCount(a.settings.AIAutoSamples))
 		if len(candidates) == 0 {
 			a.post(func() {
 				a.dropAIBackgroundTask(task)
@@ -908,6 +915,9 @@ func (a *app) suggestionBar(c *ui.Context, p palette, left, bottom float32) {
 	})
 }
 
+// aiSampleCount 把设置里的样本数限制在滑块范围内，手改设置文件也不会失控。
+func aiSampleCount(value int) int { return min(max(value, 0), 100) }
+
 // aiCandidates are the listener's own playlists for the song's source, with
 // at most samples of each. The model never sees saved or fixed playlists.
 func (a *app) aiCandidates(lib *library, tr *music.Track, samples int) []ai.Candidate {
@@ -1069,7 +1079,7 @@ func (a *app) openAIRefineFrom(tr music.Track, lib *library, pick ai.Suggestion,
 		prefs:   prefs,
 	}
 	go func() {
-		candidates := a.aiCandidates(lib, &tr, 100)
+		candidates := a.aiCandidates(lib, &tr, aiSampleCount(a.settings.AIManualSamples))
 		a.post(func() {
 			a.aiRefine.candidates = candidates
 		})

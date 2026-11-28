@@ -37,6 +37,11 @@ type settings struct {
 	AIAutoAdd bool `json:"aiAutoAdd,omitempty"`
 	// AIAutoSuggestDisabled 关闭喜欢后的自动推荐；默认开启，所以存反向值。
 	AIAutoSuggestDisabled bool `json:"aiAutoSuggestDisabled,omitempty"`
+	// AIManualSamples 手动建议时每张歌单给模型看的歌曲数；越大越准，消耗越多。
+	// 不用 omitempty，显式设成 0（只看歌单名）也要能存下来。
+	AIManualSamples int `json:"aiManualSamples"`
+	// AIAutoSamples 喜欢后自动建议的样本数；默认 0，保持后台请求轻量。
+	AIAutoSamples int `json:"aiAutoSamples"`
 	// DisabledPlugins are the IDs of the plugins turned off. All are on until
 	// then, the built-in one included.
 	DisabledPlugins []string `json:"disabledPlugins,omitempty"`
@@ -165,7 +170,7 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", PromptDownload: true, Appearance: "system", CoverBackdrop: true, CoverBackdropStyle: defaultCoverBackdropStyle(), Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, StageIntensity: "standard", CrossfadeEnabled: true, CrossfadeDurationMs: 5000, PlaybackFadeEnabled: true, PauseFadeOutMs: 180, PlayFadeInMs: 260, MVBackground: true, MVScale: 115, MVBrightness: 100, MVQuality: 1080, MV60FPS: true, MVAutoMatch: true}
+	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", PromptDownload: true, Appearance: "system", CoverBackdrop: true, CoverBackdropStyle: defaultCoverBackdropStyle(), Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048, StageIntensity: "standard", CrossfadeEnabled: true, CrossfadeDurationMs: 5000, PlaybackFadeEnabled: true, PauseFadeOutMs: 180, PlayFadeInMs: 260, MVBackground: true, MVScale: 115, MVBrightness: 100, AIManualSamples: 100, MVQuality: 1080, MV60FPS: true, MVAutoMatch: true}
 }
 
 type coverBackdropStyle struct {

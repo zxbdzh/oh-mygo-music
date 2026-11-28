@@ -113,6 +113,28 @@ func (a *app) mvSettingSlider(c *ui.Context, key, label string, value *float64, 
 	})
 }
 
+// intSettingSlider 把整数设置接到滑块上：拖动时只更新数字，松开后再写盘，
+// 键盘调整则立即保存。
+func (a *app) intSettingSlider(c *ui.Context, key, label string, value *int, low, high, step float64) {
+	ui.Row(c.Key(key)).Gap(8).AlignItems(ui.Center).Children(func() {
+		v := float64(*value)
+		slider := ui.Slider(c.Key("slider"), &v, low, high).Step(step).Width(150).Label(label)
+		dirty := ui.Local(slider, "pending-save", func() bool { return false })
+		if slider.Changed() {
+			*value = int(v + 0.5)
+			*dirty = true
+			a.redraw()
+		}
+		if *dirty && !slider.Pressed() {
+			*dirty = false
+			if err := a.settings.save(); err != nil {
+				a.toast = T("Could not save display preferences")
+			}
+		}
+		ui.Text(c, strconv.Itoa(*value)).Width(34).FontSize(12).TextAlign(ui.End)
+	})
+}
+
 // systemLanguages are the languages the system prefers; tests replace it.
 var systemLanguages = func() []string { return mygo.App.PreferredLanguages() }
 
