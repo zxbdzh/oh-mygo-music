@@ -47,8 +47,15 @@ func TestStageColorSeekFrame(t *testing.T) {
 			tt.Frame()
 			tt.SetSize(int(s.w), int(s.h))
 			tt.Frame()
-			if !bytes.Equal(original, tt.Image().Pix) {
-				t.Fatal("恢复原尺寸后，画面发生变化")
+			restored := tt.Image().Pix
+			if len(restored) != len(original) {
+				t.Fatal("未恢复到原尺寸")
+			}
+			// 缩放会重绘文字边缘，允许每个色阶差 1；歌词位置和亮度变化仍应触发失败。
+			for i, want := range original {
+				if diff := int(restored[i]) - int(want); diff < -1 || diff > 1 {
+					t.Fatalf("恢复原尺寸后，画面在通道 %d 处发生变化：%d → %d", i, want, restored[i])
+				}
 			}
 
 			s.motion = 0
